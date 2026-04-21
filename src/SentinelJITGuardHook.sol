@@ -13,6 +13,28 @@ import {ModifyLiquidityParams} from "v4-core/src/types/PoolOperation.sol";
 contract SentinelJITGuardHook is BaseHook {
     using PoolIdLibrary for PoolKey;
 
+    uint16 public constant DEPOSITED_LIQUIDITY_PENALTY = 3000;  // 30% now, can be adjusted based on how harsh we want the penalty to be 
+    uint16 public constant FEES_PENALTY = 10_000; // 100% of fees accrued as penalty, can be adjusted
+    uint16 public constant PENALTY_DIVISOR       = 10_000; // 100% = 10_000
+
+    event LiquidityTracked(
+        PoolId indexed poolId,
+        bytes32 indexed positionKey,
+        address indexed sender,
+        uint48  depositBlock,
+        uint128 liquidity
+    );
+
+    event JITPenaltyApplied(
+        PoolId indexed poolId,
+        bytes32 indexed positionKey,
+        address indexed sender,
+        int128 penalty0,
+        int128 penalty1
+    );
+
+    error PositionNotFound();
+
     struct PositionData {
         uint48  depositBlock;
         uint128 liquidity;
@@ -82,6 +104,14 @@ contract SentinelJITGuardHook is BaseHook {
             p.liquidity = 0;
         }
 
+        emit LiquidityTracked(
+            key.toId(),
+            positionKey,
+            sender,
+            p.depositBlock,
+            p.liquidity
+        );
+
         return (
             BaseHook.afterAddLiquidity.selector,
             BalanceDeltaLibrary.ZERO_DELTA
@@ -90,9 +120,7 @@ contract SentinelJITGuardHook is BaseHook {
 
 
 
-    /**
-     * 
-     */
+    
     function _afterRemoveLiquidity(
         address sender,
         PoolKey calldata key,
@@ -111,19 +139,12 @@ contract SentinelJITGuardHook is BaseHook {
         PoolId pid = key.toId();
         PositionData storage p = positions[pid][positionKey];
 
+        if (p.depositBlock == 0) revert PositionNotFound(); // Detection if hook knows caller`s position
+
         // JIT detection
         if (block.number == p.depositBlock) {
-            // // FIRST PENALIZATION METHOD
-            // // Penalize the user by donating half of all withdrawn liquidity - MIGHT BE TOO HARSH, CONSIDER LOWER PENALTY - ONLY FEES
-            // int128 amount0 = delta.amount0();
-            // int128 amount1 = delta.amount1();
-
-            // int128 penalty0 = amount0 / 2;
-            // int128 penalty1 = amount1 / 2;
-
-
-            // SECOND PENALIZATION METHOD
-            // Penalize the user by donating all fees accrued + 30% of the withdrawn liquidity - MORE FAIR, STILL SIGNIFICANT PENALTY
+            // PENALIZATION METHOD
+            // Penalize the user by donating FEES_PENALTY% fees accrued + DEPOSITED_LIQUIDITY_PENALTY% of the withdrawn liquidity
             int128 fees0 = feesAccrued.amount0();
             int128 fees1 = feesAccrued.amount1();
 
@@ -131,14 +152,14 @@ contract SentinelJITGuardHook is BaseHook {
             int128 depositedLiq0 = delta.amount0() - fees0;
             int128 depositedLiq1 = delta.amount1() - fees1;
 
+            int128 feesPenalty0 = fees0 * int16(FEES_PENALTY) / int16(PENALTY_DIVISOR);
+            int128 feesPenalty1 = fees1 * int16(FEES_PENALTY) / int16(PENALTY_DIVISOR);
 
-            int128 depositedLiqPenalty0 = depositedLiq0 * 30 / 100;
-            int128 depositedLiqPenalty1 = depositedLiq1 * 30 / 100;
+            int128 depositedLiqPenalty0 = depositedLiq0 * int16(DEPOSITED_LIQUIDITY_PENALTY) / int16(PENALTY_DIVISOR);
+            int128 depositedLiqPenalty1 = depositedLiq1 * int16(DEPOSITED_LIQUIDITY_PENALTY) / int16(PENALTY_DIVISOR);
 
-            // Penalize the user by donating all fees accrued + 30% of the withdrawn liquidity
-            int128 penalty0 = fees0 + depositedLiqPenalty0;
-            int128 penalty1 = fees1 + depositedLiqPenalty1;
-
+            int128 penalty0 = feesPenalty0 + depositedLiqPenalty0;
+            int128 penalty1 = feesPenalty1 + depositedLiqPenalty1;
 
             poolManager.donate(
                 key,
@@ -147,6 +168,14 @@ contract SentinelJITGuardHook is BaseHook {
                 ""
             );
             delete positions[pid][positionKey];
+
+            emit JITPenaltyApplied(
+                pid,
+                positionKey,
+                sender,
+                penalty0,
+                penalty1
+            );
 
             return (
                 BaseHook.afterRemoveLiquidity.selector,
@@ -157,7 +186,7 @@ contract SentinelJITGuardHook is BaseHook {
 
         return (
             BaseHook.afterRemoveLiquidity.selector,
-            BalanceDeltaLibrary.ZERO_DELTA
+            BalanceDeltaLibrary.ZERO_DELTA // Not an attack, no delta from the hook
         );
     }
 }
