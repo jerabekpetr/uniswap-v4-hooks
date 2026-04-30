@@ -33,5 +33,15 @@ contract DeployLocalV4 is BaseScript {
         console2.log("Deployed V4PoolManager at:", address(poolManager));
         console2.log("Deployed V4PositionManager at:", address(positionManager));
         console2.log("Deployed V4SwapRouter at:", address(swapRouter));
+
+        // Zapiš adresy pro 04_DeploySimulator.s.sol
+        string memory v4json = string.concat(
+            '{"permit2":"', vm.toString(address(permit2)), '",',
+            '"poolManager":"', vm.toString(address(poolManager)), '",',
+            '"positionManager":"', vm.toString(address(positionManager)), '",',
+            '"swapRouter":"', vm.toString(address(swapRouter)), '"}'
+        );
+        vm.writeFile("./frontend/v4-addresses.json", v4json);
+        console2.log("Wrote V4 addresses to ./frontend/v4-addresses.json");
     }
 }

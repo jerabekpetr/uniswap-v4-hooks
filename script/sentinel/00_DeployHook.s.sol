@@ -1,29 +1,30 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {Script} from "forge-std/Script.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 
-import {BaseScript} from "./base/BaseScript.sol";
-
-import {SentinelJITGuardHook} from "../src/SentinelJITGuardHook.sol";
+import {SentinelJITGuardHook} from "../../src/SentinelJITGuardHook.sol";
 
 /// @notice Mines the address and deploys the SentinelJITGuardHook.sol Hook contract
-contract DeployHookScript is BaseScript {
+contract DeployHookScript is Script {
     function run() public {
-        // hook contracts must have specific flags encoded in the address
+        string memory v4json = vm.readFile("./frontend/v4-addresses.json");
+        IPoolManager poolManager = IPoolManager(vm.parseJsonAddress(v4json, ".poolManager"));
+        require(address(poolManager).code.length > 0, "No code at poolManager (run 00_DeployV4 first)");
+
         uint160 flags = uint160(
             Hooks.AFTER_ADD_LIQUIDITY_FLAG
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
                 | Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG
         );
 
-        // Mine a salt that will produce a hook address with the correct flags
-        bytes memory constructorArgs = abi.encode(poolManager);
+        bytes memory constructorArgs = abi.encode(address(poolManager));
         (address hookAddress, bytes32 salt) =
             HookMiner.find(CREATE2_FACTORY, flags, type(SentinelJITGuardHook).creationCode, constructorArgs);
 
-        // Deploy the hook using CREATE2
         vm.startBroadcast();
         SentinelJITGuardHook hook = new SentinelJITGuardHook{salt: salt}(poolManager);
         vm.stopBroadcast();

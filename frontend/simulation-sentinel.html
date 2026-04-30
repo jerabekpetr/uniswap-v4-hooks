@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentinel JIT Guard — simulace</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+</head>
+<body>
+    <main>
+        <h1>Sentinel JIT Guard — simulace</h1>
+        <p class="sub">Ochrana pasivních LP před JIT útoky v Uniswap v4. Lokální demo na Anvilu.</p>
+
+        <section class="controls">
+            <label>
+                <span>Pasivní LP — vklad: <span id="passiveLabel">500</span> T na token (celkem 2× = <span id="passiveTotalLabel">1000</span> T, široký rozsah ±750 tick spacingů)</span>
+                <input type="range" id="passive" min="100" max="2500" step="100" value="500">
+            </label>
+            <label>
+                <span>JIT útočník — vklad: <span id="jitLabel">100</span> T na token (celkem 2× = <span id="jitTotalLabel">200</span> T, úzký rozsah ±2 tick spacingy)</span>
+                <input type="range" id="jit" min="10" max="2500" step="10" value="100">
+            </label>
+            <label>
+                <span>Velikost swapu: <span id="swapLabel">5</span> T</span>
+                <input type="range" id="swap" min="1" max="150" step="1" value="5">
+            </label>
+
+            <button id="runBtn" disabled>Spustit simulaci</button>
+        </section>
+
+        <p id="status" class="status">Načítám addresses.json…</p>
+        <p id="baseline" class="baseline"></p>
+
+        <div class="charts-row">
+            <div class="chart-col">
+                <h3 class="chart-title">Bez hooku</h3>
+                <div class="chart-wrapper">
+                    <canvas id="chartA"></canvas>
+                </div>
+            </div>
+            <div class="chart-col">
+                <h3 class="chart-title">Se Sentinel JIT Guard hookem</h3>
+                <div class="chart-wrapper">
+                    <canvas id="chartB"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <details class="info">
+            <summary>Jak to funguje</summary>
+            <p>Pro každý run se volá <code>Simulator.runScenario(...)</code> třikrát přes <code>eth_call</code> (žádné změny v chainu). Passive LP delta je <em>pending fees</em> spočtené z <code>feeGrowthInside</code>. JIT delta je změna token balance Simulator kontraktu během add/swap/remove.</p>
+        </details>
+    </main>
+
+    <script type="module" src="main.js"></script>
+</body>
+</html>
