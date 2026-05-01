@@ -21,6 +21,13 @@ command -v forge >/dev/null || { echo "[start-flow.sh] forge nenalezen, nainstal
 command -v python3 >/dev/null || { echo "[start-flow.sh] python3 nenalezen (potřeba pro FE server)." >&2; exit 1; }
 command -v jq >/dev/null || { echo "[start-flow.sh] jq nenalezen (potřeba pro parse adres)." >&2; exit 1; }
 
+# Ukonči případný starý Anvil na portu 8545, aby deploy šel vždy na čistý stav.
+if cast chain-id --rpc-url "$RPC_URL" >/dev/null 2>&1; then
+    echo "[start-flow.sh] Port 8545 je obsazený — zastavuju starý proces…"
+    fuser -k 8545/tcp 2>/dev/null || pkill -f "anvil" 2>/dev/null || true
+    sleep 1
+fi
+
 echo "[start-flow.sh] Startuju Anvil na portu 8545…"
 anvil --silent &
 ANVIL_PID=$!
@@ -76,4 +83,4 @@ cat frontend/addresses.json
 echo "[start-flow.sh] Spouštím FE server na http://localhost:8000/simulation-flowscore.html …"
 echo "[start-flow.sh] Stiskni Ctrl+C pro ukončení (zavře i Anvil)."
 cd frontend
-python3 -m http.server 8000
+python3 server.py

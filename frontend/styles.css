@@ -81,8 +81,11 @@ button:hover:not(:disabled) { background: #1e40af; }
 
 .info {
     margin-top: 2rem;
-    font-size: 0.85rem;
-    color: #555;
+    font-size: 1rem;
+    color: #222;
+}
+.info p {
+    margin: 0.35rem 0;
 }
 .info summary { cursor: pointer; }
 code {

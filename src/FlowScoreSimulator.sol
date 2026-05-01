@@ -32,11 +32,16 @@ contract FlowScoreSimulator {
     using LiquidityAmounts for uint160;
     using Actions for IPositionManager;
 
+    error PoolAlreadyInitialized();
+    error ZeroLiquidity();
+    error PoolNotInitialized();
+    error ZeroSwapAmount();
+
     uint24 public constant MAX_FEE = 10000;
     uint24 public constant MIN_FEE = 500;
     uint24 public constant BASE_FEE = 3000;
-    uint256 public constant FEE_DENOMINATOR = 1_000_000; // Uniswap fee units
-    uint256 public constant MAX_CASHBACK_BPS = 10;
+    uint256 public constant FEE_DENOMINATOR = 1_000_000;
+    uint256 public constant MAX_CASHBACK_BPS = 35;
     uint256 public constant BPS_DENOMINATOR = 10000;
     int24 public constant TICK_SPACING = 60;
     uint160 public constant SQRT_PRICE_1_1 = 2 ** 96;
@@ -103,8 +108,8 @@ contract FlowScoreSimulator {
     }
 
     function initializePool(uint256 initialLiquidityPerToken) external {
-        require(!poolInitialized, "Pool already initialized");
-        require(initialLiquidityPerToken > 0, "Initial liquidity must be > 0");
+        if (poolInitialized) revert PoolAlreadyInitialized();
+        if (initialLiquidityPerToken == 0) revert ZeroLiquidity();
 
         token0.approve(address(permit2), type(uint256).max);
         token1.approve(address(permit2), type(uint256).max);
@@ -124,8 +129,8 @@ contract FlowScoreSimulator {
     }
 
     function executeSwap(bool zeroForOne, uint256 amountIn) external returns (LastSwapInfo memory info) {
-        require(poolInitialized, "Pool not initialized");
-        require(amountIn > 0, "Swap amount must be > 0");
+        if (!poolInitialized) revert PoolNotInitialized();
+        if (amountIn == 0) revert ZeroSwapAmount();
 
         token0.mint(address(this), amountIn + 1e18);
         token1.mint(address(this), amountIn + 1e18);
@@ -178,8 +183,6 @@ contract FlowScoreSimulator {
         info = lastSwap;
     }
 
-    uint256 public constant EXTREME_IMBALANCE_SCALE = 80e18;
-
     function _quoteFeeBps(int256 imbalance, bool zeroForOne, uint256 swapSize, uint256 scale)
         internal
         pure
@@ -193,7 +196,7 @@ contract FlowScoreSimulator {
         if (absAfter <= absBefore) return MIN_FEE;
 
         uint256 toxicity = absAfter >= scale ? 100 : (absAfter * 100) / scale;
-        return uint24(MIN_FEE + (toxicity * (MAX_FEE - MIN_FEE)) / 100);
+        return uint24(BASE_FEE + (toxicity * (MAX_FEE - BASE_FEE)) / 100);
     }
 
     function _alignTick(int24 tick) internal pure returns (int24) {

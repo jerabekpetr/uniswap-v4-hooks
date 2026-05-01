@@ -86,7 +86,7 @@ async function refreshSnapshot() {
 
     const r0 = fmtU(reserve0);
     const r1 = fmtU(reserve1);
-    poolShareEl.textContent = `Podíl tokenů: token0 ${Number(share0Bps) / 100}% | token1 ${Number(share1Bps) / 100}%`;
+    poolShareEl.innerHTML = `Podíl tokenů: token0 <strong>${Number(share0Bps) / 100}%</strong> | token1 <strong>${Number(share1Bps) / 100}%</strong>`;
     poolReservesEl.textContent = `Rezervy: token0 ${fmtT(r0)} | token1 ${fmtT(r1)}`;
     feePotBalanceEl.textContent = `Aktuální feePot: ${fmtT(fmtU(feePotBalance))}`;
 
@@ -109,7 +109,7 @@ async function refreshSnapshot() {
         const cashbackPct = info.amountIn > 0n
             ? (Number(info.feePotUsed) / Number(info.amountIn) * 100).toFixed(4)
             : '?';
-        lastNoteEl.textContent = `Poznámka: Benigní swap čerpal cashback z feePotu (${cashbackPct} %).`;
+        lastNoteEl.textContent = `Poznámka: Swap byl benigní, čerpal cashback z feePotu (${cashbackPct} %).`;
     } else if (info.toxic) {
         const amtIn = Number(info.amountIn);
         const feePct = amtIn > 0
