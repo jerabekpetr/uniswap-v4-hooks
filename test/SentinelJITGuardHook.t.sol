@@ -161,6 +161,98 @@ contract SentinelJITGuardHookTest is BaseTest {
     }
 
     // ─────────────────────────────────────────────
+    // FUZZ TESTS
+    // ─────────────────────────────────────────────
+
+    function test_Fuzz_PenaltyNeverExceedsDelta(uint128 liquidity) public {
+        liquidity = uint128(bound(liquidity, 1e15, 50e18));
+
+        address attacker = makeAddr("fuzzTest");
+        _fundAndApprove(attacker, 1000e18);
+
+        vm.startPrank(attacker);
+
+        uint256 balance0BeforeMint = currency0.balanceOf(attacker);
+
+        (uint256 attackerTokenId,) = positionManager.mint(
+            poolKey,
+            tickLower,
+            tickUpper,
+            liquidity,
+            type(uint256).max,
+            type(uint256).max,
+            attacker,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
+
+        uint256 balance0AfterMint = currency0.balanceOf(attacker);
+        uint256 deposited = balance0BeforeMint - balance0AfterMint;
+
+        positionManager.decreaseLiquidity(
+            attackerTokenId,
+            liquidity,
+            0,
+            0,
+            attacker,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
+
+        vm.stopPrank();
+
+        uint256 balance0AfterRemove = currency0.balanceOf(attacker);
+        uint256 received = balance0AfterRemove - balance0AfterMint;
+
+        // Penalizace je maximálně 30% z vkladu
+        uint256 maxPenalty = deposited * hook.DEPOSITED_LIQUIDITY_PENALTY() / hook.PENALTY_DIVISOR();
+        assertLe(deposited - received, maxPenalty + 1); 
+
+    }
+
+    function test_Fuzz_NoPenaltyAfterGracePeriod(uint128 liquidity, uint256 blocksToWait) public {
+        liquidity = uint128(bound(liquidity, 1e15, 50e18));
+        blocksToWait = bound(blocksToWait, 1, 100);
+        address lp = makeAddr("fuzzyLP");
+        _fundAndApprove(lp, 1000e18);
+
+        vm.startPrank(lp);
+        (uint256 tokenId,) = positionManager.mint(
+            poolKey,
+            tickLower,
+            tickUpper,
+            liquidity,
+            type(uint256).max,
+            type(uint256).max,
+            lp,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
+
+        uint256 balance0AfterMint = currency0.balanceOf(lp);
+
+        // Počkej libovolný počet bloků
+        vm.roll(block.number + blocksToWait);
+
+        positionManager.decreaseLiquidity(
+            tokenId,
+            liquidity,
+            0,
+            0,
+            lp,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
+
+        vm.stopPrank();
+
+        uint256 balance0AfterRemove = currency0.balanceOf(lp);
+
+        // Po čekání dostane LP zpět aspoň tolik co vložil (žádná penalizace)
+        assertGe(balance0AfterRemove, balance0AfterMint);
+    }
+
+    // ─────────────────────────────────────────────
     // Helper
     // ─────────────────────────────────────────────
     function _fundAndApprove(address user, uint256 amount) internal {

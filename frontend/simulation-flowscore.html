@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flow Score Hook — interaktivní swap</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <main>
+        <h1>Flow Score Hook — interaktivní swap</h1>
+        <p class="sub">Jeden pool, dva směry swapu. Sleduj podíl tokenů a výsledek posledního swapu.</p>
+
+        <section class="controls">
+            <label>
+                <span>Počáteční likvidita: <span id="liquidityLabel">500</span> T na token</span>
+                <input type="range" id="liquidity" min="100" max="5000" step="100" value="500">
+            </label>
+            <button id="initBtn" disabled>Inicializovat pool</button>
+
+            <label>
+                <span>Velikost swapu: <span id="swapAmountLabel">0.50</span> T</span>
+                <input type="range" id="swapAmount" min="0.01" max="30" step="0.01" value="0.50">
+            </label>
+
+            <div style="display:flex; gap:12px; flex-wrap:wrap;">
+                <button id="swap0Btn" disabled>Spustit swap token0 → token1</button>
+                <button id="swap1Btn" disabled>Spustit swap token1 → token0</button>
+            </div>
+        </section>
+
+        <p id="status" class="status">Načítám addresses.json…</p>
+
+        <section class="info" style="margin-top:16px;">
+            <h3>Stav poolu</h3>
+            <p id="poolShare">Podíl tokenů: -</p>
+            <p id="poolReserves">Rezervy: -</p>
+            <p id="feePotBalance">Aktuální feePot: -</p>
+        </section>
+
+        <section class="info" style="margin-top:16px;">
+            <h3>Poslední swap</h3>
+            <p id="lastDirection">Směr: -</p>
+            <p id="lastFee">Fee zaplaceno: -</p>
+            <p id="lastOut">Obdržel ze swapu: -</p>
+            <p id="lastPotIn">Do feePotu přibylo: -</p>
+            <p id="lastPotOut">Z feePotu se vyplatilo: -</p>
+            <p id="lastNote">Poznámka: -</p>
+        </section>
+    </main>
+
+    <script type="module" src="flowscore-main.js"></script>
+</body>
+</html>
