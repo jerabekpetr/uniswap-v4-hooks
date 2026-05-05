@@ -33,9 +33,24 @@
 
         <section class="info" style="margin-top:16px;">
             <h3>Stav poolu</h3>
-            <p id="poolShare">Podíl tokenů: -</p>
-            <p id="poolReserves">Rezervy: -</p>
-            <p id="feePotBalance">Aktuální feePot: -</p>
+            <div class="share-row">
+                <div class="share-box">
+                    <div class="share-box-label">token0</div>
+                    <div class="share-box-pct" id="share0Pct">—</div>
+                    <div class="share-box-reserve" id="reserve0">—</div>
+                </div>
+                <div class="share-box">
+                    <div class="share-box-label">token1</div>
+                    <div class="share-box-pct" id="share1Pct">—</div>
+                    <div class="share-box-reserve" id="reserve1">—</div>
+                </div>
+            </div>
+            <div class="feepot-row">
+                <div class="share-box feepot-box">
+                    <div class="share-box-label">feePot</div>
+                    <div class="share-box-pct feepot-val" id="feePotBalance">—</div>
+                </div>
+            </div>
         </section>
 
         <section class="info" style="margin-top:16px;">

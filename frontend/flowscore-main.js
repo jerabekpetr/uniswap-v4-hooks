@@ -17,8 +17,10 @@ const initBtn = document.getElementById('initBtn');
 const swap0Btn = document.getElementById('swap0Btn');
 const swap1Btn = document.getElementById('swap1Btn');
 const statusEl = document.getElementById('status');
-const poolShareEl = document.getElementById('poolShare');
-const poolReservesEl = document.getElementById('poolReserves');
+const share0PctEl = document.getElementById('share0Pct');
+const share1PctEl = document.getElementById('share1Pct');
+const reserve0El = document.getElementById('reserve0');
+const reserve1El = document.getElementById('reserve1');
 const feePotBalanceEl = document.getElementById('feePotBalance');
 const lastDirectionEl = document.getElementById('lastDirection');
 const lastFeeEl = document.getElementById('lastFee');
@@ -86,9 +88,11 @@ async function refreshSnapshot() {
 
     const r0 = fmtU(reserve0);
     const r1 = fmtU(reserve1);
-    poolShareEl.innerHTML = `Podíl tokenů: token0 <strong>${Number(share0Bps) / 100}%</strong> | token1 <strong>${Number(share1Bps) / 100}%</strong>`;
-    poolReservesEl.textContent = `Rezervy: token0 ${fmtT(r0)} | token1 ${fmtT(r1)}`;
-    feePotBalanceEl.textContent = `Aktuální feePot: ${fmtT(fmtU(feePotBalance))}`;
+    share0PctEl.textContent = (Number(share0Bps) / 100).toFixed(2) + '%';
+    share1PctEl.textContent = (Number(share1Bps) / 100).toFixed(2) + '%';
+    reserve0El.textContent = fmtT(r0);
+    reserve1El.textContent = fmtT(r1);
+    feePotBalanceEl.textContent = fmtT(fmtU(feePotBalance));
 
     if (!info.exists) {
         lastDirectionEl.textContent = 'Směr: -';

@@ -289,8 +289,10 @@ contract FlowScoreHook is BaseHook {
         uint256 absBefore = _abs(imbalanceBefore);
         uint256 absAfter  = _abs(imbalanceAfter);
 
-        // Toxic if distance from 50:50 increases (includes overshooting to the other side).
-        isToxic = absAfter > absBefore;
+        // Toxic if distance from 50:50 increases, or if swap overshoots through zero
+        // (e.g. +50 → -49 reduces |imbalance| but creates a new imbalance on the other side).
+        bool signChanged = (imbalanceBefore != 0) && ((imbalanceBefore > 0) != (imbalanceAfter > 0));
+        isToxic = absAfter > absBefore || signChanged;
 
         uint256 scale = state.imbalanceScale > 0 ? state.imbalanceScale : DEFAULT_IMBALANCE_SCALE;
         toxicityRatio = absAfter >= scale ? 100 : (absAfter * 100) / scale;
