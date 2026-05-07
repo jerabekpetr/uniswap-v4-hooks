@@ -80,6 +80,11 @@ contract SentinelJITGuardHookTest is BaseTest {
         );
     }
 
+    // ─────────────────────────────────────────────
+    // UNIT TESTS
+    // ─────────────────────────────────────────────
+
+    /// @dev Hook stores depositBlock and liquidity after afterAddLiquidity callback.
     function test_PositionTrackedOnAdd() public view {
         bytes32 pk = keccak256(abi.encodePacked(
             address(positionManager),
@@ -92,6 +97,27 @@ contract SentinelJITGuardHookTest is BaseTest {
         assertEq(depositBlock, uint48(block.number)); // depositBlock != 0
     }
 
+    /// @dev Position tracked in one pool does not appear in a separate pool.
+    function test_Unit_PoolIsolation() public view {
+        PoolKey memory otherKey = PoolKey(currency0, currency1, 3000, 60, IHooks(address(0)));
+        PoolId otherId = otherKey.toId();
+
+        bytes32 pk = keccak256(abi.encodePacked(
+            address(positionManager),
+            tickLower,
+            tickUpper,
+            bytes32(passiveLPTokenId)
+        ));
+
+        (uint48 depositBlock,) = hook.positions(otherId, pk);
+        assertEq(depositBlock, 0);
+    }
+
+    // ─────────────────────────────────────────────
+    // INTEGRATION TESTS
+    // ─────────────────────────────────────────────
+
+    /// @dev LP removing liquidity one block later receives tokens back with no penalty.
     function test_RemoveLiquidity_NextBlock_NoPenalty() public {
         vm.roll(block.number + 1);
 
@@ -115,7 +141,8 @@ contract SentinelJITGuardHookTest is BaseTest {
         assertGt(balance1After, balance1Before);
     }
 
-
+    /// @dev Attacker adding and removing liquidity in the same block receives penalty
+    /// equal to DEPOSITED_LIQUIDITY_PENALTY % of deposited amount. 
     function test_JIT_SameBlock_PenaltyApplied() public {
         address attacker = makeAddr("attacker");
         _fundAndApprove(attacker, 1000e18);
@@ -163,7 +190,7 @@ contract SentinelJITGuardHookTest is BaseTest {
     // ─────────────────────────────────────────────
     // FUZZ TESTS
     // ─────────────────────────────────────────────
-
+    /// @dev Penalty never exceeds DEPOSITED_LIQUIDITY_PENALTY % of deposited amount regardless of liquidity size.    
     function test_Fuzz_PenaltyNeverExceedsDelta(uint128 liquidity) public {
         liquidity = uint128(bound(liquidity, 1e15, 50e18));
 
@@ -210,6 +237,7 @@ contract SentinelJITGuardHookTest is BaseTest {
 
     }
 
+    /// @dev No penalty is applied after waiting any number of blocks.
     function test_Fuzz_NoPenaltyAfterGracePeriod(uint128 liquidity, uint256 blocksToWait) public {
         liquidity = uint128(bound(liquidity, 1e15, 50e18));
         blocksToWait = bound(blocksToWait, 1, 100);
@@ -250,6 +278,41 @@ contract SentinelJITGuardHookTest is BaseTest {
 
         // Po čekání dostane LP zpět aspoň tolik co vložil (žádná penalizace)
         assertGe(balance0AfterRemove, balance0AfterMint);
+    }
+
+    /// @dev JIT penalty never causes accounting revert regardless of liquidity size.
+    function test_Fuzz_Remove_NoNegativeAccounting(uint128 liquidity) public {
+        liquidity = uint128(bound(liquidity, 1e15, 50e18));
+
+        address attacker = makeAddr("fuzzAccounting");
+        _fundAndApprove(attacker, 1000e18);
+
+        vm.startPrank(attacker);
+
+        (uint256 tokenId,) = positionManager.mint(
+            poolKey,
+            tickLower,
+            tickUpper,
+            liquidity,
+            type(uint256).max,
+            type(uint256).max,
+            attacker,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
+
+        // Same block removal — should apply penalty but never revert
+        positionManager.decreaseLiquidity(
+            tokenId,
+            liquidity,
+            0,
+            0,
+            attacker,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
+
+        vm.stopPrank();
     }
 
     // ─────────────────────────────────────────────

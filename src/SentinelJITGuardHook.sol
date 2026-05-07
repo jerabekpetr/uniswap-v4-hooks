@@ -42,6 +42,11 @@ contract SentinelJITGuardHook is BaseHook {
 
     mapping(PoolId => mapping(bytes32 => PositionData)) public positions;
 
+    /// @notice Derives a unique position key from sender, tick range and salt.
+    /// @param sender Address of the liquidity provider.
+    /// @param tickLower Lower tick of the position.
+    /// @param tickUpper Upper tick of the position.
+    /// @param salt Unique salt from ModifyLiquidityParams.
     function _positionKey(
         address sender,
         int24 tickLower,
@@ -55,9 +60,8 @@ contract SentinelJITGuardHook is BaseHook {
 
     constructor(IPoolManager _pm) BaseHook(_pm) {}
 
-    function getHookPermissions() public pure override 
-        returns (Hooks.Permissions memory) 
-    {
+    /// @notice Returns the set of hook callbacks this hook uses.
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
             beforeInitialize:                false,
             afterInitialize:                 false,
@@ -79,8 +83,11 @@ contract SentinelJITGuardHook is BaseHook {
     /////////////////////////
     // CALLBACKS
     /////////////////////////
-    
 
+    /// @notice Records deposit block and liquidity amount for a new position.
+    /// @param sender Address of the liquidity provider.
+    /// @param key The pool the liquidity was added to.
+    /// @param params Liquidity modification parameters.
     function _afterAddLiquidity(
         address sender,
         PoolKey calldata key,
@@ -118,9 +125,13 @@ contract SentinelJITGuardHook is BaseHook {
         );
     }
 
-
-
-    
+    /// @notice Detects JIT attack and applies penalty if liquidity is removed
+    /// in the same block it was deposited. Penalty is donated to the pool.
+    /// @param sender Address of the liquidity provider.
+    /// @param key The pool liquidity is being removed from.
+    /// @param params Liquidity modification parameters.
+    /// @param delta Token amounts being returned to the LP.
+    /// @param feesAccrued Fees earned by the position since last collection.
     function _afterRemoveLiquidity(
         address sender,
         PoolKey calldata key,

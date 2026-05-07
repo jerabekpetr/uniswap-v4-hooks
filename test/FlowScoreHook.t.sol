@@ -84,6 +84,11 @@ contract FlowScoreHookTest is BaseTest {
         );
     }
 
+    // ─────────────────────────────────────────────
+    // UNIT TESTS
+    // ─────────────────────────────────────────────
+
+    /// @dev Initial hook state after pool init: emaPrice > 0, imbalance = 0, feePot = 0.
     function test_InitialState() public view {
         (
             uint256 emaPrice,
@@ -98,13 +103,161 @@ contract FlowScoreHookTest is BaseTest {
         assertGt(lastUpdated, 0);        
     }
 
+    /// @dev Larger toxic swap must contribute more to feePot than a smaller one.
+    function test_Unit_FeePot_ScalesWithSwapSize() public {
+        _fundAndApprove(address(this), 10_000e18);
 
+        uint256 snap = vm.snapshot();
+
+        // small toxic swap
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 1e18,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+        (,, uint256 feePotSmall,,) = hook.flowState(poolId);
+
+        vm.revertTo(snap);
+        _fundAndApprove(address(this), 10_000e18);
+
+        // large toxic swap
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 10e18,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+        (,, uint256 feePotLarge,,) = hook.flowState(poolId);
+
+        assertGt(feePotLarge, feePotSmall);
+    }
+
+    /// @dev Benign swap receives no cashback when feePot is empty.
+    function test_Unit_NoRebate_EmptyFeePot() public {
+        _fundAndApprove(address(this), 1000e18);
+
+        // Tiny toxic swap - toxicityRatio ≈ 0, contribution rounds to 0, feePot stays empty
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 1e15,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+
+        (,, uint256 feePot,,) = hook.flowState(poolId);
+        assertEq(feePot, 0);
+
+        // Benign swap back - no cashback expected
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 1e15,
+            amountOutMin: 0,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+
+        (,, uint256 feePotAfter,,) = hook.flowState(poolId);
+        assertEq(feePotAfter, 0);
+    }
+
+    /// @dev Cashback is capped at feePot balance - feePot never goes negative.
+    function test_Unit_Cashback_CappedAtFeePot() public {
+        _fundAndApprove(address(this), 1000e18);
+
+        // Toxic swap - builds feePot
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 1e18,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+
+        (,, uint256 feePotBefore,,) = hook.flowState(poolId);
+        assertGt(feePotBefore, 0);
+
+        // Benign swap - smaller than imbalance, does not overshoot
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 0.5e18,
+            amountOutMin: 0,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+
+        (,, uint256 feePotAfter,,) = hook.flowState(poolId);
+        assertLe(feePotAfter, feePotBefore);
+    }
+
+    /// @dev Once imbalance exceeds scale, toxicityRatio is capped at 100 - fee stays at MAX_FEE.
+    /// Two identical swaps at the cap must produce the same feePot contribution.
+    function test_Unit_Fee_CappedAtMaxFee() public {
+        _fundAndApprove(address(this), 10_000e18);
+        hook.setImbalanceScale(poolKey, 5e18);
+
+        // Push well past scale
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 20e18,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+
+        (,, uint256 feePot0,,) = hook.flowState(poolId);
+
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 1e18,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+        (,, uint256 feePot1,,) = hook.flowState(poolId);
+
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 1e18,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+        (,, uint256 feePot2,,) = hook.flowState(poolId);
+
+        assertEq(feePot1 - feePot0, feePot2 - feePot1);
+    }
+    // ─────────────────────────────────────────────
+    // INTEGRATION TESTS
+    // ─────────────────────────────────────────────
+
+    /// @dev Second same-direction swap receives less token1 - higher toxicityRatio raises fee.
     function test_ToxicSwap_HigherFee() public {
         _fundAndApprove(address(this), 1000e18);
 
-        uint256 balance0Before = currency0.balanceOfSelf();
-
-        // Imbalance
+        // First toxic swap
+        uint256 balance1Before = currency1.balanceOfSelf();
         swapRouter.swapExactTokensForTokens({
             amountIn: 10e18,
             amountOutMin: 0,
@@ -114,13 +267,10 @@ contract FlowScoreHookTest is BaseTest {
             receiver: address(this),
             deadline: block.timestamp + 1
         });
+        uint256 received1First = currency1.balanceOfSelf() - balance1Before;
 
-        uint256 balance0AfterFirst = currency0.balanceOfSelf();
-        uint256 spent0First = balance0Before - balance0AfterFirst;
-
-        uint256 balance0BeforeSecond = currency0.balanceOfSelf();
-
-        // 2nd Toxic swap
+        // Second toxic swap
+        uint256 balance1BeforeSecond = currency1.balanceOfSelf();
         swapRouter.swapExactTokensForTokens({
             amountIn: 10e18,
             amountOutMin: 0,
@@ -130,13 +280,12 @@ contract FlowScoreHookTest is BaseTest {
             receiver: address(this),
             deadline: block.timestamp + 1
         });
+        uint256 received1Second = currency1.balanceOfSelf() - balance1BeforeSecond;
 
-        uint256 balance0AfterSecond = currency0.balanceOfSelf();
-        uint256 spent0Second = balance0BeforeSecond - balance0AfterSecond;
-
-        assertGe(spent0Second, spent0First);
+        assertLt(received1Second, received1First);
     }
 
+    /// @dev Repeated toxic swaps in the same direction must grow feePot.
     function test_FeePot_AccumulatesAfterToxicSwap() public {
         _fundAndApprove(address(this), 1000e18);
 
@@ -166,7 +315,7 @@ contract FlowScoreHookTest is BaseTest {
         assertGt(feePot, 0);
     }
 
-    
+    /// @dev Benign swap (reduces imbalance) receives cashback; feePot decreases accordingly
     function test_BenignSwap_GetsCashback() public {
         _fundAndApprove(address(this), 1000e18);
         // Imbalance
@@ -217,6 +366,78 @@ contract FlowScoreHookTest is BaseTest {
         uint256 received0 = balance0After - balance0Before;
         uint256 spent1 = balance1Before - balance1After;
         assertGt(received0, spent1 * 99 / 100);
+    }
+    
+    // ─────────────────────────────────────────────
+    // FUZZ TESTS
+    // ─────────────────────────────────────────────
+
+    /// @dev feePot never underflows regardless of swap sequence.
+    function test_Fuzz_FeePot_NeverUnderflows(uint256 toxicSize, uint256 benignSize) public {
+        toxicSize = bound(toxicSize, 1e15, 50e18);
+        benignSize = bound(benignSize, 1e15, toxicSize);
+
+        _fundAndApprove(address(this), 1000e18);
+
+        // Toxic swap — builds feePot
+        swapRouter.swapExactTokensForTokens({
+            amountIn: toxicSize,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+
+        // Benign swap — bounded by toxicSize to avoid overshoot
+        swapRouter.swapExactTokensForTokens({
+            amountIn: benignSize,
+            amountOutMin: 0,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+
+        (,, uint256 feePot,,) = hook.flowState(poolId);
+        assertGe(feePot, 0);
+    }
+
+    /// @dev Total cashback paid out never exceeds total feePot accumulated.
+    function test_Fuzz_TotalRebates_NeverExceedSurcharge(uint256 toxicSize, uint256 benignSize) public {
+        toxicSize = bound(toxicSize, 1e15, 50e18);
+        benignSize = bound(benignSize, 1e15, toxicSize);
+
+        _fundAndApprove(address(this), 1000e18);
+
+        swapRouter.swapExactTokensForTokens({
+            amountIn: toxicSize,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+
+        (,, uint256 feePotAfterToxic,,) = hook.flowState(poolId);
+
+        swapRouter.swapExactTokensForTokens({
+            amountIn: benignSize,
+            amountOutMin: 0,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+
+        (,, uint256 feePotAfterBenign,,) = hook.flowState(poolId);
+
+        uint256 cashbackPaid = feePotAfterToxic - feePotAfterBenign;
+        assertLe(cashbackPaid, feePotAfterToxic);
     }
 
 

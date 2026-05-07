@@ -27,13 +27,6 @@ contract FlowScoreHook is BaseHook {
     uint256 public constant FEE_UNITS_DENOMINATOR    = 1_000_000;
     uint256 public constant EMA_ALPHA        = 20;
     uint256 public constant EMA_DENOMINATOR  = 100;
-    // 50 % of the extra fee above BASE_FEE goes into feePot.
-    // MAX_CASHBACK_BPS is calibrated so that a single round-trip (one big push to scale,
-    // one big fix back) leaves feePot exactly flat:
-    //   contribution_max = swapSize * (MAX_FEE-BASE_FEE) * 5000 / (1e6 * 10000) = 0.35 %
-    //   cashback_max     = swapSize * 35 / 10000                                 = 0.35 %
-    // Fixing via many small swaps yields less total cashback (half-triangle), so feePot
-    // gently builds a reserve over time — "enough but not too much".
     uint256 public constant FEE_POT_CONTRIBUTION_BPS = 5000; // 50 % of extra fee → feePot
     uint256 public constant MAX_CASHBACK_BPS         = 35;   // 0.35 % max cashback
     uint256 public constant BPS_DENOMINATOR          = 10000;
@@ -62,7 +55,7 @@ contract FlowScoreHook is BaseHook {
 
 
 
-
+    /// @notice Returns the set of hook callbacks this hook uses.
     function getHookPermissions() public pure override
         returns (Hooks.Permissions memory)
     {
@@ -89,6 +82,9 @@ contract FlowScoreHook is BaseHook {
     // CALLBACKS
     /////////////////////////
 
+    /// @notice Initializes per-pool flow state after pool creation.
+    /// @param key The pool being initialized.
+    /// @param sqrtPriceX96 Initial sqrt price used to seed the EMA.
     function _afterInitialize(
         address,
         PoolKey calldata key,
@@ -110,6 +106,11 @@ contract FlowScoreHook is BaseHook {
         return BaseHook.afterInitialize.selector;
     }
 
+    /// @notice Computes toxicity of the incoming swap and sets the dynamic fee.
+    /// Toxic swaps pay up to MAX_FEE; benign swaps pay MIN_FEE.
+    /// For exactInput toxic swaps, the feePot contribution is collected immediately.
+    /// @param key The pool being swapped in.
+    /// @param params Swap parameters (direction, amount).
     function _beforeSwap(
         address,
         PoolKey calldata key,
@@ -168,6 +169,11 @@ contract FlowScoreHook is BaseHook {
         );
     }
 
+    /// @notice Updates pool flow state after swap and handles cashback for benign swaps.
+    /// Collects deferred contributions for exactOutput toxic swaps.
+    /// @param key The pool being swapped in.
+    /// @param params Swap parameters.
+    /// @param delta Actual token amounts exchanged.
     function _afterSwap(
         address,
         PoolKey calldata key,
@@ -250,13 +256,17 @@ contract FlowScoreHook is BaseHook {
     // HELPER Functions
     /////////////////////////
 
-    function _sqrtPriceToPrice(uint160 sqrtPriceX96) 
-        internal pure returns (uint256) 
-    {
+    /// @notice Converts sqrtPriceX96 to a price with 18 decimal precision.
+    /// @param sqrtPriceX96 Square root price in Q96 format.
+    /// @return Price as token1/token0 with 1e18 scaling.
+    function _sqrtPriceToPrice(uint160 sqrtPriceX96) internal pure returns (uint256) {
         uint256 sq = uint256(sqrtPriceX96);
         return ((sq * sq) * 1e18) >> 192;
     }
 
+    /// @notice Transfers tokens from this hook back to the PoolManager as settlement.
+    /// @param currency Token to settle.
+    /// @param amount Amount to transfer.
     function _settleToPoolManager(Currency currency, uint256 amount) internal {
         if (amount == 0) return;
 
@@ -269,10 +279,10 @@ contract FlowScoreHook is BaseHook {
         }
     }
 
-    // Returns (toxicityRatio 0-100, isToxic).
-    // isToxic  = swap worsens pool balance (moves further from 50:50, or overshoots to the other side).
-    // ratio    = how far from 50:50 the pool ends up after the swap, relative to imbalanceScale.
-    //            ratio 0 → at peg; ratio 100 → fully imbalanced (fee == MAX_FEE).
+    /// @notice Computes toxicity ratio and toxic flag for an incoming swap.
+    /// A swap is toxic if it increases pool imbalance or overshoots through zero.
+    /// @return toxicityRatio Value in [0, 100] where 100 means fully imbalanced.
+    /// @return isToxic True if the swap worsens pool balance.
     function _computeToxicity(
         PoolFlowState storage state,
         SwapParams calldata params
@@ -298,15 +308,18 @@ contract FlowScoreHook is BaseHook {
         toxicityRatio = absAfter >= scale ? 100 : (absAfter * 100) / scale;
     }
 
+    /// @notice Returns the absolute value of a signed integer.
     function _abs(int256 x) internal pure returns (uint256) {
         return uint256(x >= 0 ? x : -x);
     }
 
-    // Mirrors _computeToxicity: cashback is proportional to how imbalanced the pool was
-    // BEFORE the swap (startRatio = absBefore / scale).  This is symmetric to the penalty
-    // which is proportional to how imbalanced the pool is AFTER the swap (absAfter / scale).
-    // A single round-trip (push to scale, one big fix) leaves feePot flat.
-    // Many small fixes yield less total cashback (half-triangle), so feePot builds a reserve.
+    /// @notice Computes cashback in basis points for a benign swap.
+    /// Cashback is proportional to how imbalanced the pool was before the swap.
+    /// Returns 0 if the swap did not improve pool balance.
+    /// @param imbalanceBefore Pool imbalance before the swap.
+    /// @param imbalanceAfter Pool imbalance after the swap.
+    /// @param imbalanceScale Per-pool scale for normalizing imbalance.
+
     function _computeCashbackBps(
         int256 imbalanceBefore,
         int256 imbalanceAfter,
