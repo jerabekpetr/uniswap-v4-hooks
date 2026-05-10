@@ -17,6 +17,8 @@ import {BaseTest} from "./utils/BaseTest.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {SentinelJITGuardHook} from "../src/SentinelJITGuardHook.sol";
 import {FlowScoreHook} from "../src/FlowScoreHook.sol";
+import {FlatTimelockWithdrawalFeeHook} from "../src/baselines/FlatTimelockWithdrawalFeeHook.sol";
+import {SimpleVolatilityFeeHook} from "../src/baselines/SimpleVolatilityFeeHook.sol";
 
 contract GasBenchmark is BaseTest {
     using EasyPosm for IPositionManager;
@@ -26,11 +28,15 @@ contract GasBenchmark is BaseTest {
     // Pools
     PoolKey vanillaKey;
     PoolKey sentinelKey;
+    PoolKey flatTimelockKey;
     PoolKey flowScoreKey;
+    PoolKey simpleVolKey;
 
     // Hooks
     SentinelJITGuardHook sentinel;
+    FlatTimelockWithdrawalFeeHook flatTimelock;
     FlowScoreHook flowScore;
+    SimpleVolatilityFeeHook simpleVol;
 
     Currency currency0;
     Currency currency1;
@@ -44,7 +50,7 @@ contract GasBenchmark is BaseTest {
 
         _fundAndApprove(address(this), 100_000e18);
 
-        // --- Vanilla pool ---
+        // --- Vanilla pool (no hook) ---
         vanillaKey = PoolKey(currency0, currency1, 3000, 60, IHooks(address(0)));
         poolManager.initialize(vanillaKey, Constants.SQRT_PRICE_1_1);
 
@@ -60,6 +66,18 @@ contract GasBenchmark is BaseTest {
         sentinelKey = PoolKey(currency0, currency1, 3000, 60, IHooks(sentinel));
         poolManager.initialize(sentinelKey, Constants.SQRT_PRICE_1_1);
 
+        // --- Flat timelock baseline pool ---
+        address flatFlags = address(
+            uint160(
+                Hooks.AFTER_ADD_LIQUIDITY_FLAG | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
+                    | Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG
+            ) ^ (0x7777 << 144)
+        );
+        deployCodeTo("FlatTimelockWithdrawalFeeHook.sol:FlatTimelockWithdrawalFeeHook", abi.encode(poolManager), flatFlags);
+        flatTimelock = FlatTimelockWithdrawalFeeHook(flatFlags);
+        flatTimelockKey = PoolKey(currency0, currency1, 3000, 60, IHooks(flatTimelock));
+        poolManager.initialize(flatTimelockKey, Constants.SQRT_PRICE_1_1);
+
         // --- FlowScore pool ---
         address flowFlags = address(
             uint160(
@@ -72,44 +90,54 @@ contract GasBenchmark is BaseTest {
         flowScoreKey = PoolKey(currency0, currency1, LPFeeLibrary.DYNAMIC_FEE_FLAG, 60, IHooks(flowScore));
         poolManager.initialize(flowScoreKey, Constants.SQRT_PRICE_1_1);
 
+        // --- Simple volatility baseline pool ---
+        address simpleVolFlags = address(
+            uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG) ^ (0x8888 << 144)
+        );
+        deployCodeTo("SimpleVolatilityFeeHook.sol:SimpleVolatilityFeeHook", abi.encode(poolManager), simpleVolFlags);
+        simpleVol = SimpleVolatilityFeeHook(payable(simpleVolFlags));
+        simpleVolKey = PoolKey(currency0, currency1, LPFeeLibrary.DYNAMIC_FEE_FLAG, 60, IHooks(simpleVol));
+        poolManager.initialize(simpleVolKey, Constants.SQRT_PRICE_1_1);
+
         tickLower = TickMath.minUsableTick(60);
         tickUpper = TickMath.maxUsableTick(60);
 
-        // Seed liquidity into all three pools
+        // Seed liquidity into all pools
         _addLiquidity(vanillaKey, 100e18);
         _addLiquidity(sentinelKey, 100e18);
+        _addLiquidity(flatTimelockKey, 100e18);
         _addLiquidity(flowScoreKey, 100e18);
+        _addLiquidity(simpleVolKey, 100e18);
     }
 
     // ─────────────────────────────────────────────
     // BENCHMARKS
     // ─────────────────────────────────────────────
 
-    function test_Gas_AddLiquidity() public {
-        // Warm up storage slots for all three pools
+    function test_Gas_AddLiquidity_SentinelVsFlatTimelock() public {
         _addLiquidity(vanillaKey, 1e15);
         _addLiquidity(sentinelKey, 1e15);
-        _addLiquidity(flowScoreKey, 1e15);
+        _addLiquidity(flatTimelockKey, 1e15);
 
         uint256 g;
 
         g = gasleft();
         _addLiquidity(vanillaKey, 10e18);
-        console.log("addLiquidity vanilla:   ", g - gasleft());
+        console.log("addLiquidity vanilla:      ", g - gasleft());
 
         g = gasleft();
         _addLiquidity(sentinelKey, 10e18);
-        console.log("addLiquidity sentinel:  ", g - gasleft());
+        console.log("addLiquidity sentinel:     ", g - gasleft());
 
         g = gasleft();
-        _addLiquidity(flowScoreKey, 10e18);
-        console.log("addLiquidity flowScore: ", g - gasleft());
+        _addLiquidity(flatTimelockKey, 10e18);
+        console.log("addLiquidity flatTimelock: ", g - gasleft());
     }
 
-    function test_Gas_RemoveLiquidity() public {
+    function test_Gas_RemoveLiquidity_SentinelVsFlatTimelock() public {
         uint256 tokenVanilla = _addLiquidity(vanillaKey, 10e18);
         uint256 tokenSentinel = _addLiquidity(sentinelKey, 10e18);
-        uint256 tokenFlow = _addLiquidity(flowScoreKey, 10e18);
+        uint256 tokenFlat = _addLiquidity(flatTimelockKey, 10e18);
 
         vm.roll(block.number + 1);
 
@@ -119,40 +147,95 @@ contract GasBenchmark is BaseTest {
         positionManager.decreaseLiquidity(
             tokenVanilla, 10e18, 0, 0, address(this), block.timestamp + 1, Constants.ZERO_BYTES
         );
-        console.log("removeLiquidity vanilla:   ", g - gasleft());
+        console.log("removeLiquidity vanilla:      ", g - gasleft());
 
         g = gasleft();
         positionManager.decreaseLiquidity(
             tokenSentinel, 10e18, 0, 0, address(this), block.timestamp + 1, Constants.ZERO_BYTES
         );
-        console.log("removeLiquidity sentinel:  ", g - gasleft());
+        console.log("removeLiquidity sentinel:     ", g - gasleft());
 
         g = gasleft();
         positionManager.decreaseLiquidity(
-            tokenFlow, 10e18, 0, 0, address(this), block.timestamp + 1, Constants.ZERO_BYTES
+            tokenFlat, 10e18, 0, 0, address(this), block.timestamp + 1, Constants.ZERO_BYTES
         );
-        console.log("removeLiquidity flowScore: ", g - gasleft());
+        console.log("removeLiquidity flatTimelock: ", g - gasleft());
     }
 
-    function test_Gas_Swap() public {
-        // Warm up
-        _swap(vanillaKey, 0.1e18);
-        _swap(sentinelKey, 0.1e18);
-        _swap(flowScoreKey, 0.1e18);
+    function test_Gas_Swap_SentinelVsFlatTimelock() public {
+        _swap(vanillaKey, 0.1e18, true);
+        _swap(sentinelKey, 0.1e18, true);
+        _swap(flatTimelockKey, 0.1e18, true);
 
         uint256 g;
 
         g = gasleft();
-        _swap(vanillaKey, 1e18);
-        console.log("swap vanilla:   ", g - gasleft());
+        _swap(vanillaKey, 1e18, true);
+        console.log("swap vanilla:       ", g - gasleft());
 
         g = gasleft();
-        _swap(sentinelKey, 1e18);
-        console.log("swap sentinel:  ", g - gasleft());
+        _swap(sentinelKey, 1e18, true);
+        console.log("swap sentinel:     ", g - gasleft());
 
         g = gasleft();
-        _swap(flowScoreKey, 1e18);
-        console.log("swap flowScore: ", g - gasleft());
+        _swap(flatTimelockKey, 1e18, true);
+        console.log("swap flatTimelock: ", g - gasleft());
+    }
+
+    function test_Gas_Swap_FlowScoreVsSimpleVolatility() public {
+        // Warm up and build deterministic volatility state for both dynamic fee hooks.
+        for (uint256 i = 0; i < 4; i++) {
+            vm.roll(block.number + 1);
+            bool direction = i % 2 == 0;
+            _swap(vanillaKey, 0.3e18, direction);
+            _swap(flowScoreKey, 0.3e18, direction);
+            _swap(simpleVolKey, 0.3e18, direction);
+        }
+
+        uint256 g;
+
+        g = gasleft();
+        _swap(vanillaKey, 1e18, true);
+        console.log("swap vanilla:         ", g - gasleft());
+
+        g = gasleft();
+        _swap(flowScoreKey, 1e18, true);
+        console.log("swap flowScore:        ", g - gasleft());
+
+        g = gasleft();
+        _swap(simpleVolKey, 1e18, true);
+        console.log("swap simpleVolatility: ", g - gasleft());
+    }
+
+    function test_Gas_AddLiquidity() public {
+        // Legacy aggregate benchmark retained for continuity.
+        _addLiquidity(vanillaKey, 1e15);
+        _addLiquidity(flatTimelockKey, 1e15);
+        _addLiquidity(sentinelKey, 1e15);
+        _addLiquidity(simpleVolKey, 1e15);
+        _addLiquidity(flowScoreKey, 1e15);
+
+        uint256 g;
+
+        g = gasleft();
+        _addLiquidity(vanillaKey, 10e18);
+        console.log("addLiquidity vanilla:       ", g - gasleft());
+
+        g = gasleft();
+        _addLiquidity(flatTimelockKey, 10e18);
+        console.log("addLiquidity flatTimelock: ", g - gasleft());
+
+        g = gasleft();
+        _addLiquidity(sentinelKey, 10e18);
+        console.log("addLiquidity sentinel:     ", g - gasleft());
+
+        g = gasleft();
+        _addLiquidity(simpleVolKey, 10e18);
+        console.log("addLiquidity simpleVol:    ", g - gasleft());
+
+        g = gasleft();
+        _addLiquidity(flowScoreKey, 10e18);
+        console.log("addLiquidity flowScore:    ", g - gasleft());
     }
 
     // ─────────────────────────────────────────────
@@ -173,11 +256,11 @@ contract GasBenchmark is BaseTest {
         );
     }
 
-    function _swap(PoolKey memory key, uint256 amountIn) internal {
+    function _swap(PoolKey memory key, uint256 amountIn, bool zeroForOne) internal {
         swapRouter.swapExactTokensForTokens({
             amountIn: amountIn,
             amountOutMin: 0,
-            zeroForOne: true,
+            zeroForOne: zeroForOne,
             poolKey: key,
             hookData: Constants.ZERO_BYTES,
             receiver: address(this),
