@@ -16,11 +16,8 @@ contract DeployFlowScoreHookScript is Script {
         require(address(poolManager).code.length > 0, "No code at poolManager (run 00_DeployV4 first)");
 
         uint160 flags = uint160(
-            Hooks.BEFORE_SWAP_FLAG
-                | Hooks.AFTER_SWAP_FLAG
-                | Hooks.AFTER_INITIALIZE_FLAG
-                | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
-                | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+            Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_INITIALIZE_FLAG
+                | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
         );
 
         bytes memory constructorArgs = abi.encode(address(poolManager));

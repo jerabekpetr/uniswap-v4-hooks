@@ -51,9 +51,8 @@ contract GasBenchmark is BaseTest {
         // --- Sentinel pool ---
         address sentinelFlags = address(
             uint160(
-                Hooks.AFTER_ADD_LIQUIDITY_FLAG
-                    | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
-                    | Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG
+                Hooks.AFTER_ADD_LIQUIDITY_FLAG | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
+                    | Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_FLAG
             ) ^ (0x4444 << 144)
         );
         deployCodeTo("SentinelJITGuardHook.sol:SentinelJITGuardHook", abi.encode(poolManager), sentinelFlags);
@@ -64,11 +63,8 @@ contract GasBenchmark is BaseTest {
         // --- FlowScore pool ---
         address flowFlags = address(
             uint160(
-                Hooks.BEFORE_SWAP_FLAG
-                    | Hooks.AFTER_SWAP_FLAG
-                    | Hooks.AFTER_INITIALIZE_FLAG
-                    | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
-                    | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+                Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_INITIALIZE_FLAG
+                    | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
             ) ^ (0x5555 << 144)
         );
         deployCodeTo("FlowScoreHook.sol:FlowScoreHook", abi.encode(poolManager), flowFlags);
@@ -111,24 +107,30 @@ contract GasBenchmark is BaseTest {
     }
 
     function test_Gas_RemoveLiquidity() public {
-        uint256 tokenVanilla  = _addLiquidity(vanillaKey,    10e18);
-        uint256 tokenSentinel = _addLiquidity(sentinelKey,   10e18);
-        uint256 tokenFlow     = _addLiquidity(flowScoreKey,  10e18);
+        uint256 tokenVanilla = _addLiquidity(vanillaKey, 10e18);
+        uint256 tokenSentinel = _addLiquidity(sentinelKey, 10e18);
+        uint256 tokenFlow = _addLiquidity(flowScoreKey, 10e18);
 
         vm.roll(block.number + 1);
 
         uint256 g;
 
         g = gasleft();
-        positionManager.decreaseLiquidity(tokenVanilla, 10e18, 0, 0, address(this), block.timestamp + 1, Constants.ZERO_BYTES);
+        positionManager.decreaseLiquidity(
+            tokenVanilla, 10e18, 0, 0, address(this), block.timestamp + 1, Constants.ZERO_BYTES
+        );
         console.log("removeLiquidity vanilla:   ", g - gasleft());
 
         g = gasleft();
-        positionManager.decreaseLiquidity(tokenSentinel, 10e18, 0, 0, address(this), block.timestamp + 1, Constants.ZERO_BYTES);
+        positionManager.decreaseLiquidity(
+            tokenSentinel, 10e18, 0, 0, address(this), block.timestamp + 1, Constants.ZERO_BYTES
+        );
         console.log("removeLiquidity sentinel:  ", g - gasleft());
 
         g = gasleft();
-        positionManager.decreaseLiquidity(tokenFlow, 10e18, 0, 0, address(this), block.timestamp + 1, Constants.ZERO_BYTES);
+        positionManager.decreaseLiquidity(
+            tokenFlow, 10e18, 0, 0, address(this), block.timestamp + 1, Constants.ZERO_BYTES
+        );
         console.log("removeLiquidity flowScore: ", g - gasleft());
     }
 
@@ -137,7 +139,7 @@ contract GasBenchmark is BaseTest {
         _swap(vanillaKey, 0.1e18);
         _swap(sentinelKey, 0.1e18);
         _swap(flowScoreKey, 0.1e18);
-        
+
         uint256 g;
 
         g = gasleft();

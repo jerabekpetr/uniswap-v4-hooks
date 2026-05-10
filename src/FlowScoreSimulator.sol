@@ -21,7 +21,13 @@ interface IFlowScoreHookLike {
     function flowState(PoolId)
         external
         view
-        returns (uint256 emaPrice, int256 inventoryImbalance, uint256 feePot, uint256 lastUpdated, uint256 imbalanceScale);
+        returns (
+            uint256 emaPrice,
+            int256 inventoryImbalance,
+            uint256 feePot,
+            uint256 lastUpdated,
+            uint256 imbalanceScale
+        );
     function setImbalanceScale(PoolKey calldata key, uint256 scale) external;
 }
 
@@ -136,14 +142,14 @@ contract FlowScoreSimulator {
         token1.mint(address(this), amountIn + 1e18);
 
         PoolId pid = poolKey.toId();
-        (, int256 imbalance, uint256 feePotBefore, , uint256 imbalanceScale) = flowHook.flowState(pid);
+        (, int256 imbalance, uint256 feePotBefore,, uint256 imbalanceScale) = flowHook.flowState(pid);
 
         uint24 feeBps = _quoteFeeBps(imbalance, zeroForOne, amountIn, imbalanceScale);
         bool toxic = feeBps > BASE_FEE;
         uint256 feePaid = (amountIn * feeBps) / FEE_DENOMINATOR;
 
         uint256 amountOut = _swap(zeroForOne, amountIn);
-        (, , uint256 feePotAfter, ,) = flowHook.flowState(pid);
+        (,, uint256 feePotAfter,,) = flowHook.flowState(pid);
         uint256 feePotAdded = feePotAfter > feePotBefore ? feePotAfter - feePotBefore : 0;
         uint256 feePotUsed = feePotBefore > feePotAfter ? feePotBefore - feePotAfter : 0;
 
@@ -179,7 +185,7 @@ contract FlowScoreSimulator {
             share0Bps = (reserve0 * BPS_DENOMINATOR) / total;
             share1Bps = BPS_DENOMINATOR - share0Bps;
         }
-        (,, feePotBalance, ,) = flowHook.flowState(poolKey.toId());
+        (,, feePotBalance,,) = flowHook.flowState(poolKey.toId());
         info = lastSwap;
     }
 

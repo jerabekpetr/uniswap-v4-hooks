@@ -21,35 +21,27 @@ contract DeploySimulatorScript is Script {
 
         string memory v4json = vm.readFile("./frontend/v4-addresses.json");
         address poolMgrAddr = vm.parseJsonAddress(v4json, ".poolManager");
-        address posMgrAddr  = vm.parseJsonAddress(v4json, ".positionManager");
-        address routerAddr  = vm.parseJsonAddress(v4json, ".swapRouter");
+        address posMgrAddr = vm.parseJsonAddress(v4json, ".positionManager");
+        address routerAddr = vm.parseJsonAddress(v4json, ".swapRouter");
         address permit2Addr = vm.parseJsonAddress(v4json, ".permit2");
 
-        require(hookAddr.code.length    > 0, "No code at SENTINEL_HOOK_ADDRESS");
+        require(hookAddr.code.length > 0, "No code at SENTINEL_HOOK_ADDRESS");
         require(poolMgrAddr.code.length > 0, "No code at poolManager (run 00_DeployV4 first)");
 
-        IPoolManager       poolManager     = IPoolManager(poolMgrAddr);
-        IPositionManager   positionManager = IPositionManager(posMgrAddr);
-        IUniswapV4Router04 swapRouter      = IUniswapV4Router04(payable(routerAddr));
-        IPermit2           permit2         = IPermit2(permit2Addr);
+        IPoolManager poolManager = IPoolManager(poolMgrAddr);
+        IPositionManager positionManager = IPositionManager(posMgrAddr);
+        IUniswapV4Router04 swapRouter = IUniswapV4Router04(payable(routerAddr));
+        IPermit2 permit2 = IPermit2(permit2Addr);
 
         vm.startBroadcast();
 
         MockERC20 t0 = new MockERC20("Token0", "T0", 18);
         MockERC20 t1 = new MockERC20("Token1", "T1", 18);
 
-        (MockERC20 token0, MockERC20 token1) =
-            address(t0) < address(t1) ? (t0, t1) : (t1, t0);
+        (MockERC20 token0, MockERC20 token1) = address(t0) < address(t1) ? (t0, t1) : (t1, t0);
 
-        SentinelSimulator simulator = new SentinelSimulator(
-            poolManager,
-            positionManager,
-            swapRouter,
-            permit2,
-            token0,
-            token1,
-            IHooks(hookAddr)
-        );
+        SentinelSimulator simulator =
+            new SentinelSimulator(poolManager, positionManager, swapRouter, permit2, token0, token1, IHooks(hookAddr));
         vm.stopBroadcast();
 
         console2.log("Simulator deployed at:", address(simulator));
@@ -57,11 +49,21 @@ contract DeploySimulatorScript is Script {
         string memory json = string.concat(
             "{\n",
             '  "chainId": 31337,\n',
-            '  "simulator": "', vm.toString(address(simulator)), '",\n',
-            '  "hook": "', vm.toString(hookAddr), '",\n',
-            '  "token0": "', vm.toString(address(token0)), '",\n',
-            '  "token1": "', vm.toString(address(token1)), '",\n',
-            '  "poolManager": "', vm.toString(address(poolManager)), '"\n',
+            '  "simulator": "',
+            vm.toString(address(simulator)),
+            '",\n',
+            '  "hook": "',
+            vm.toString(hookAddr),
+            '",\n',
+            '  "token0": "',
+            vm.toString(address(token0)),
+            '",\n',
+            '  "token1": "',
+            vm.toString(address(token1)),
+            '",\n',
+            '  "poolManager": "',
+            vm.toString(address(poolManager)),
+            '"\n',
             "}\n"
         );
         vm.writeFile("./frontend/addresses.json", json);

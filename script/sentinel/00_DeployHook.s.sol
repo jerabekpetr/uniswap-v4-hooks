@@ -16,8 +16,7 @@ contract DeployHookScript is Script {
         require(address(poolManager).code.length > 0, "No code at poolManager (run 00_DeployV4 first)");
 
         uint160 flags = uint160(
-            Hooks.AFTER_ADD_LIQUIDITY_FLAG
-                | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
+            Hooks.AFTER_ADD_LIQUIDITY_FLAG | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
                 | Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG
         );
 

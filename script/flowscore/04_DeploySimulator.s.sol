@@ -47,11 +47,21 @@ contract DeployFlowScoreSimulatorScript is Script {
         string memory json = string.concat(
             "{\n",
             '  "chainId": 31337,\n',
-            '  "simulator": "', vm.toString(address(simulator)), '",\n',
-            '  "hook": "', vm.toString(hookAddr), '",\n',
-            '  "token0": "', vm.toString(address(token0)), '",\n',
-            '  "token1": "', vm.toString(address(token1)), '",\n',
-            '  "poolManager": "', vm.toString(address(poolManager)), '"\n',
+            '  "simulator": "',
+            vm.toString(address(simulator)),
+            '",\n',
+            '  "hook": "',
+            vm.toString(hookAddr),
+            '",\n',
+            '  "token0": "',
+            vm.toString(address(token0)),
+            '",\n',
+            '  "token1": "',
+            vm.toString(address(token1)),
+            '",\n',
+            '  "poolManager": "',
+            vm.toString(address(poolManager)),
+            '"\n',
             "}\n"
         );
         vm.writeFile("./frontend/addresses.json", json);

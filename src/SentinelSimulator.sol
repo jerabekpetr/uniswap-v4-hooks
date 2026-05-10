@@ -27,17 +27,17 @@ contract SentinelSimulator {
     using Actions for IPositionManager;
     using FullMath for uint256;
 
-    uint24  public constant FEE = 3000;
-    int24   public constant TICK_SPACING = 60;
-    uint160 public constant SQRT_PRICE_1_1 = 2**96; 
+    uint24 public constant FEE = 3000;
+    int24 public constant TICK_SPACING = 60;
+    uint160 public constant SQRT_PRICE_1_1 = 2 ** 96;
 
-    IPoolManager      public immutable poolManager;
-    IPositionManager  public immutable positionManager;
+    IPoolManager public immutable poolManager;
+    IPositionManager public immutable positionManager;
     IUniswapV4Router04 public immutable swapRouter;
-    IPermit2          public immutable permit2;
-    MockERC20         public immutable token0;
-    MockERC20         public immutable token1;
-    IHooks            public immutable sentinelHook;
+    IPermit2 public immutable permit2;
+    MockERC20 public immutable token0;
+    MockERC20 public immutable token1;
+    IHooks public immutable sentinelHook;
 
     PoolKey public poolWithHookKey;
     PoolKey public poolNoHookKey;
@@ -70,20 +70,10 @@ contract SentinelSimulator {
         Currency c0 = Currency.wrap(address(_token0));
         Currency c1 = Currency.wrap(address(_token1));
 
-        poolWithHookKey = PoolKey({
-            currency0: c0,
-            currency1: c1,
-            fee: FEE,
-            tickSpacing: TICK_SPACING,
-            hooks: _sentinelHook
-        });
-        poolNoHookKey = PoolKey({
-            currency0: c0,
-            currency1: c1,
-            fee: FEE,
-            tickSpacing: TICK_SPACING,
-            hooks: IHooks(address(0))
-        });
+        poolWithHookKey =
+            PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: TICK_SPACING, hooks: _sentinelHook});
+        poolNoHookKey =
+            PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: TICK_SPACING, hooks: IHooks(address(0))});
 
         if (address(poolManager).code.length > 0) {
             try _poolManager.initialize(poolWithHookKey, SQRT_PRICE_1_1) {} catch {}
@@ -152,12 +142,12 @@ contract SentinelSimulator {
             jitSpent1 = b1BeforeAdd - token1.balanceOf(address(this));
         }
 
-        // Swap 
+        // Swap
         if (swapAmountIn > 0) {
             result.swapAmountOut = _swap(poolKey, swapAmountIn);
         }
 
-        // JIT remove — měříme co bylo vráceno, swap z výpočtu vynecháme 
+        // JIT remove — měříme co bylo vráceno, swap z výpočtu vynecháme
         if (useJIT && jitTokenId != 0) {
             uint256 b0BeforeRemove = token0.balanceOf(address(this));
             uint256 b1BeforeRemove = token1.balanceOf(address(this));
@@ -170,12 +160,8 @@ contract SentinelSimulator {
 
         // Passive LP fee growth measurement
         if (passiveTokenId != 0) {
-            (result.passiveLPDelta0, result.passiveLPDelta1) = _computePassiveFees(
-                poolId,
-                passiveLower,
-                passiveUpper,
-                passiveTokenId
-            );
+            (result.passiveLPDelta0, result.passiveLPDelta1) =
+                _computePassiveFees(poolId, passiveLower, passiveUpper, passiveTokenId);
         }
     }
 
@@ -241,15 +227,16 @@ contract SentinelSimulator {
         amountOut = token1.balanceOf(address(this)) - before;
     }
 
-    function _computePassiveFees(
-        PoolId poolId,
-        int24 tickLower,
-        int24 tickUpper,
-        uint256 tokenId
-    ) internal view returns (int256 fees0, int256 fees1) {
+    function _computePassiveFees(PoolId poolId, int24 tickLower, int24 tickUpper, uint256 tokenId)
+        internal
+        view
+        returns (int256 fees0, int256 fees1)
+    {
         bytes32 salt = bytes32(tokenId);
-        (uint128 liquidity, uint256 feeGrowthInside0Last, uint256 feeGrowthInside1Last) = poolManager.getPositionInfo(poolId, address(positionManager), tickLower, tickUpper, salt);
-        (uint256 feeGrowthInside0Now, uint256 feeGrowthInside1Now) = poolManager.getFeeGrowthInside(poolId, tickLower, tickUpper);
+        (uint128 liquidity, uint256 feeGrowthInside0Last, uint256 feeGrowthInside1Last) =
+            poolManager.getPositionInfo(poolId, address(positionManager), tickLower, tickUpper, salt);
+        (uint256 feeGrowthInside0Now, uint256 feeGrowthInside1Now) =
+            poolManager.getFeeGrowthInside(poolId, tickLower, tickUpper);
 
         uint256 delta0 = feeGrowthInside0Now >= feeGrowthInside0Last ? feeGrowthInside0Now - feeGrowthInside0Last : 0;
         uint256 delta1 = feeGrowthInside1Now >= feeGrowthInside1Last ? feeGrowthInside1Now - feeGrowthInside1Last : 0;

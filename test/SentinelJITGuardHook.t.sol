@@ -20,7 +20,6 @@ import {BaseTest} from "./utils/BaseTest.sol";
 import {SentinelJITGuardHook} from "../src/SentinelJITGuardHook.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
-
 contract SentinelJITGuardHookTest is BaseTest {
     using EasyPosm for IPositionManager;
     using PoolIdLibrary for PoolKey;
@@ -37,36 +36,33 @@ contract SentinelJITGuardHookTest is BaseTest {
     int24 tickLower;
     int24 tickUpper;
 
-    // Pasivní LP tokenId
+    // Passive LP tokenId
     uint256 passiveLPTokenId;
 
     function setUp() public {
         deployArtifactsAndLabel();
         (currency0, currency1) = deployCurrencyPair();
 
-        // Deploy hooku na adresu se správnými flagy
+        // Deploy hook at address with correct flags
         address flags = address(
             uint160(
-                Hooks.AFTER_ADD_LIQUIDITY_FLAG
-                    | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
-                    | Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG
-            )^(0x4444 << 144)
+                Hooks.AFTER_ADD_LIQUIDITY_FLAG | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
+                    | Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_FLAG
+            ) ^ (0x4444 << 144)
         );
 
         bytes memory constructorArgs = abi.encode(poolManager);
         deployCodeTo("SentinelJITGuardHook.sol:SentinelJITGuardHook", constructorArgs, flags);
         hook = SentinelJITGuardHook(flags);
 
-        // Vytvoř pool
         poolKey = PoolKey(currency0, currency1, 3000, 60, IHooks(hook));
         poolId = poolKey.toId();
         poolManager.initialize(poolKey, Constants.SQRT_PRICE_1_1);
 
-        // Tick range pro full-range likviditu
         tickLower = TickMath.minUsableTick(poolKey.tickSpacing);
         tickUpper = TickMath.maxUsableTick(poolKey.tickSpacing);
 
-        // Pasivní LP přidá likviditu v setUp – blok 1
+        // Passive LP adds full-range liquidity in setUp – block 1.
         (passiveLPTokenId,) = positionManager.mint(
             poolKey,
             tickLower,
@@ -84,17 +80,13 @@ contract SentinelJITGuardHookTest is BaseTest {
     // UNIT TESTS
     // ─────────────────────────────────────────────
 
-    /// @dev Hook stores depositBlock and liquidity after afterAddLiquidity callback.
+    /// @dev Hook stores addedAtBlock and liquidity after afterAddLiquidity callback.
     function test_PositionTrackedOnAdd() public view {
-        bytes32 pk = keccak256(abi.encodePacked(
-            address(positionManager),
-            tickLower,
-            tickUpper,
-            bytes32(passiveLPTokenId)
-        ));
+        bytes32 pk =
+            keccak256(abi.encodePacked(address(positionManager), tickLower, tickUpper, bytes32(passiveLPTokenId)));
 
-        (uint48 depositBlock,) = hook.positions(poolId, pk);
-        assertEq(depositBlock, uint48(block.number)); // depositBlock != 0
+        (uint48 addedAtBlock,,,,,,) = hook.positions(poolId, pk);
+        assertEq(addedAtBlock, uint48(block.number));
     }
 
     /// @dev Position tracked in one pool does not appear in a separate pool.
@@ -102,22 +94,19 @@ contract SentinelJITGuardHookTest is BaseTest {
         PoolKey memory otherKey = PoolKey(currency0, currency1, 3000, 60, IHooks(address(0)));
         PoolId otherId = otherKey.toId();
 
-        bytes32 pk = keccak256(abi.encodePacked(
-            address(positionManager),
-            tickLower,
-            tickUpper,
-            bytes32(passiveLPTokenId)
-        ));
+        bytes32 pk =
+            keccak256(abi.encodePacked(address(positionManager), tickLower, tickUpper, bytes32(passiveLPTokenId)));
 
-        (uint48 depositBlock,) = hook.positions(otherId, pk);
-        assertEq(depositBlock, 0);
+        (uint48 addedAtBlock,,,,,,) = hook.positions(otherId, pk);
+        assertEq(addedAtBlock, 0);
     }
 
     // ─────────────────────────────────────────────
     // INTEGRATION TESTS
     // ─────────────────────────────────────────────
 
-    /// @dev LP removing liquidity one block later receives tokens back with no penalty.
+    /// @dev Full-range LP removing liquidity one block later receives tokens back with no effective penalty
+    /// (width factor makes penalty round to zero for full-range positions).
     function test_RemoveLiquidity_NextBlock_NoPenalty() public {
         vm.roll(block.number + 1);
 
@@ -125,13 +114,7 @@ contract SentinelJITGuardHookTest is BaseTest {
         uint256 balance1Before = currency1.balanceOfSelf();
 
         positionManager.decreaseLiquidity(
-            passiveLPTokenId,
-            50e18,
-            0,
-            0,
-            address(this),
-            block.timestamp + 1,
-            Constants.ZERO_BYTES
+            passiveLPTokenId, 50e18, 0, 0, address(this), block.timestamp + 1, Constants.ZERO_BYTES
         );
 
         uint256 balance0After = currency0.balanceOfSelf();
@@ -141,11 +124,15 @@ contract SentinelJITGuardHookTest is BaseTest {
         assertGt(balance1After, balance1Before);
     }
 
-    /// @dev Attacker adding and removing liquidity in the same block receives penalty
-    /// equal to DEPOSITED_LIQUIDITY_PENALTY % of deposited amount. 
+    /// @dev Attacker adding and removing narrow-range liquidity in the same block receives a penalty
+    /// equal to BASE_PENALTY_BPS of the deposited principal.
     function test_JIT_SameBlock_PenaltyApplied() public {
         address attacker = makeAddr("attacker");
         _fundAndApprove(attacker, 1000e18);
+
+        // Narrow range: width = 240 ticks ≤ REFERENCE_WIDTH_TICKS (600) → full width factor.
+        int24 jitLower = -120;
+        int24 jitUpper = 120;
 
         vm.startPrank(attacker);
 
@@ -153,8 +140,8 @@ contract SentinelJITGuardHookTest is BaseTest {
 
         (uint256 attackerTokenId,) = positionManager.mint(
             poolKey,
-            tickLower,
-            tickUpper,
+            jitLower,
+            jitUpper,
             50e18,
             type(uint256).max,
             type(uint256).max,
@@ -164,33 +151,28 @@ contract SentinelJITGuardHookTest is BaseTest {
         );
 
         uint256 balance0AfterMint = currency0.balanceOf(attacker);
-
         uint256 deposited = balance0BeforeMint - balance0AfterMint;
 
         positionManager.decreaseLiquidity(
-            attackerTokenId,
-            50e18,
-            0,
-            0,
-            attacker,
-            block.timestamp + 1,
-            Constants.ZERO_BYTES
+            attackerTokenId, 50e18, 0, 0, attacker, block.timestamp + 1, Constants.ZERO_BYTES
         );
 
         vm.stopPrank();
 
         uint256 balance0AfterRemove = currency0.balanceOf(attacker);
         uint256 received = balance0AfterRemove - balance0AfterMint;
-        uint256 actualPenalty = deposited -received;
-        uint256 expectedPenalty = deposited*hook.DEPOSITED_LIQUIDITY_PENALTY()/hook.PENALTY_DIVISOR();
+        uint256 actualPenalty = deposited - received;
+        uint256 expectedPenalty = deposited * hook.BASE_PENALTY_BPS() / hook.BPS();
 
-        assertApproxEqRel(actualPenalty, expectedPenalty, 0.01e18); // 0.01 = 1% tolerance
+        assertApproxEqRel(actualPenalty, expectedPenalty, 0.01e18); // 1% tolerance
     }
 
     // ─────────────────────────────────────────────
     // FUZZ TESTS
     // ─────────────────────────────────────────────
-    /// @dev Penalty never exceeds DEPOSITED_LIQUIDITY_PENALTY % of deposited amount regardless of liquidity size.    
+
+    /// @dev Penalty never exceeds BASE_PENALTY_BPS of deposited amount regardless of liquidity size.
+    /// Full-range positions have near-zero width factor so actual penalty << maximum.
     function test_Fuzz_PenaltyNeverExceedsDelta(uint128 liquidity) public {
         liquidity = uint128(bound(liquidity, 1e15, 50e18));
 
@@ -217,13 +199,7 @@ contract SentinelJITGuardHookTest is BaseTest {
         uint256 deposited = balance0BeforeMint - balance0AfterMint;
 
         positionManager.decreaseLiquidity(
-            attackerTokenId,
-            liquidity,
-            0,
-            0,
-            attacker,
-            block.timestamp + 1,
-            Constants.ZERO_BYTES
+            attackerTokenId, liquidity, 0, 0, attacker, block.timestamp + 1, Constants.ZERO_BYTES
         );
 
         vm.stopPrank();
@@ -231,13 +207,13 @@ contract SentinelJITGuardHookTest is BaseTest {
         uint256 balance0AfterRemove = currency0.balanceOf(attacker);
         uint256 received = balance0AfterRemove - balance0AfterMint;
 
-        // Penalizace je maximálně 30% z vkladu
-        uint256 maxPenalty = deposited * hook.DEPOSITED_LIQUIDITY_PENALTY() / hook.PENALTY_DIVISOR();
-        assertLe(deposited - received, maxPenalty + 1); 
-
+        // Penalty is at most BASE_PENALTY_BPS of deposit (plus vol boost, but vol is 0 here).
+        uint256 maxPenalty = deposited * hook.BASE_PENALTY_BPS() / hook.BPS();
+        assertLe(deposited - received, maxPenalty + 1);
     }
 
-    /// @dev No penalty is applied after waiting any number of blocks.
+    /// @dev No effective penalty for full-range positions regardless of how many blocks have elapsed
+    /// (width factor makes the penalty round to zero for full-range positions).
     function test_Fuzz_NoPenaltyAfterGracePeriod(uint128 liquidity, uint256 blocksToWait) public {
         liquidity = uint128(bound(liquidity, 1e15, 50e18));
         blocksToWait = bound(blocksToWait, 1, 100);
@@ -259,24 +235,15 @@ contract SentinelJITGuardHookTest is BaseTest {
 
         uint256 balance0AfterMint = currency0.balanceOf(lp);
 
-        // Počkej libovolný počet bloků
         vm.roll(block.number + blocksToWait);
 
-        positionManager.decreaseLiquidity(
-            tokenId,
-            liquidity,
-            0,
-            0,
-            lp,
-            block.timestamp + 1,
-            Constants.ZERO_BYTES
-        );
+        positionManager.decreaseLiquidity(tokenId, liquidity, 0, 0, lp, block.timestamp + 1, Constants.ZERO_BYTES);
 
         vm.stopPrank();
 
         uint256 balance0AfterRemove = currency0.balanceOf(lp);
 
-        // Po čekání dostane LP zpět aspoň tolik co vložil (žádná penalizace)
+        // Full-range: width factor rounds penalty to 0 → LP gets back at least what they deposited.
         assertGe(balance0AfterRemove, balance0AfterMint);
     }
 
@@ -301,16 +268,8 @@ contract SentinelJITGuardHookTest is BaseTest {
             Constants.ZERO_BYTES
         );
 
-        // Same block removal — should apply penalty but never revert
-        positionManager.decreaseLiquidity(
-            tokenId,
-            liquidity,
-            0,
-            0,
-            attacker,
-            block.timestamp + 1,
-            Constants.ZERO_BYTES
-        );
+        // Same block removal – should apply penalty but never revert.
+        positionManager.decreaseLiquidity(tokenId, liquidity, 0, 0, attacker, block.timestamp + 1, Constants.ZERO_BYTES);
 
         vm.stopPrank();
     }

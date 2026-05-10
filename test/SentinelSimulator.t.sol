@@ -31,9 +31,8 @@ contract SentinelSimulatorTest is BaseTest {
 
         address flags = address(
             uint160(
-                Hooks.AFTER_ADD_LIQUIDITY_FLAG
-                    | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
-                    | Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG
+                Hooks.AFTER_ADD_LIQUIDITY_FLAG | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
+                    | Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_FLAG
             ) ^ (0x5555 << 144)
         );
         bytes memory hookArgs = abi.encode(poolManager);
@@ -63,13 +62,7 @@ contract SentinelSimulatorTest is BaseTest {
     }
 
     function test_RunScenarioCallable_ReturnsZeroOnEmpty() public {
-        SentinelSimulator.ScenarioResult memory r = simulator.runScenario(
-            0, 0, 
-            0, 0,   
-            0,      
-            true,   
-            false   
-        );
+        SentinelSimulator.ScenarioResult memory r = simulator.runScenario(0, 0, 0, 0, 0, true, false);
         assertEq(r.passiveLPDelta0, 0);
         assertEq(r.passiveLPDelta1, 0);
         assertEq(r.jitDelta0, 0);
@@ -78,13 +71,7 @@ contract SentinelSimulatorTest is BaseTest {
     }
 
     function test_Baseline_PassiveLPEarnsFromSwap() public {
-        SentinelSimulator.ScenarioResult memory r = simulator.runScenario(
-            100e18, 100e18,   
-            0, 0,            
-            5e18,             
-            true,     
-            false        
-        );
+        SentinelSimulator.ScenarioResult memory r = simulator.runScenario(100e18, 100e18, 0, 0, 5e18, true, false);
 
         assertGt(r.passiveLPDelta0 + r.passiveLPDelta1, 0, "passive LP should earn fees");
         assertEq(r.jitDelta0, 0, "no JIT scenario -> jit delta 0");
@@ -94,11 +81,13 @@ contract SentinelSimulatorTest is BaseTest {
 
     function test_JITAttack_NoHook_AttackerProfits() public {
         SentinelSimulator.ScenarioResult memory r = simulator.runScenario(
-            100e18, 100e18,
-            100e18, 100e18,
+            100e18,
+            100e18,
+            100e18,
+            100e18,
             5e18,
             false,
-            true     // useJIT
+            true // useJIT
         );
 
         int256 jitNet = r.jitDelta0 + r.jitDelta1;
@@ -107,10 +96,12 @@ contract SentinelSimulatorTest is BaseTest {
 
     function test_JITAttack_WithHook_AttackerLosesToPenalty() public {
         SentinelSimulator.ScenarioResult memory r = simulator.runScenario(
-            100e18, 100e18,
-            100e18, 100e18,
+            100e18,
+            100e18,
+            100e18,
+            100e18,
             5e18,
-            true,    // useHook=true
+            true, // useHook=true
             true
         );
 
@@ -121,36 +112,26 @@ contract SentinelSimulatorTest is BaseTest {
     function test_JITAttack_HookReducesJITProfit() public {
         uint256 snap = vm.snapshot();
 
-        SentinelSimulator.ScenarioResult memory noHook = simulator.runScenario(
-            100e18, 100e18, 100e18, 100e18, 5e18, false, true
-        );
+        SentinelSimulator.ScenarioResult memory noHook =
+            simulator.runScenario(100e18, 100e18, 100e18, 100e18, 5e18, false, true);
         vm.revertTo(snap);
 
-        SentinelSimulator.ScenarioResult memory withHook = simulator.runScenario(
-            100e18, 100e18, 100e18, 100e18, 5e18, true, true
-        );
+        SentinelSimulator.ScenarioResult memory withHook =
+            simulator.runScenario(100e18, 100e18, 100e18, 100e18, 5e18, true, true);
 
-        assertLt(
-            withHook.jitDelta0 + withHook.jitDelta1,
-            noHook.jitDelta0 + noHook.jitDelta1
-        );
+        assertLt(withHook.jitDelta0 + withHook.jitDelta1, noHook.jitDelta0 + noHook.jitDelta1);
     }
 
     function test_JITAttack_HookIncreasesPassiveLPEarnings() public {
         uint256 snap = vm.snapshot();
 
-        SentinelSimulator.ScenarioResult memory noHook = simulator.runScenario(
-            100e18, 100e18, 100e18, 100e18, 5e18, false, true
-        );
+        SentinelSimulator.ScenarioResult memory noHook =
+            simulator.runScenario(100e18, 100e18, 100e18, 100e18, 5e18, false, true);
         vm.revertTo(snap);
 
-        SentinelSimulator.ScenarioResult memory withHook = simulator.runScenario(
-            100e18, 100e18, 100e18, 100e18, 5e18, true, true
-        );
+        SentinelSimulator.ScenarioResult memory withHook =
+            simulator.runScenario(100e18, 100e18, 100e18, 100e18, 5e18, true, true);
 
-        assertGt(
-            withHook.passiveLPDelta0 + withHook.passiveLPDelta1,
-            noHook.passiveLPDelta0 + noHook.passiveLPDelta1
-        );
+        assertGt(withHook.passiveLPDelta0 + withHook.passiveLPDelta1, noHook.passiveLPDelta0 + noHook.passiveLPDelta1);
     }
 }
