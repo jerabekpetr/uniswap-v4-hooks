@@ -235,6 +235,61 @@ contract FlowScoreHookTest is BaseTest {
         assertEq(feePot1 - feePot0, feePot2 - feePot1);
     }
 
+    /// @dev Only owner can call setImbalanceScale; any other address reverts.
+    function test_FlowScore_SetImbalanceScale_OnlyOwner() public {
+        address nonOwner = makeAddr("nonOwner");
+        vm.prank(nonOwner);
+        vm.expectRevert("not owner");
+        hook.setImbalanceScale(poolKey, 1e18);
+
+        hook.setImbalanceScale(poolKey, 1e18);
+        (,,,,,, uint256 scale,,) = hook.flowState(poolId);
+        assertEq(scale, 1e18);
+    }
+
+    /// @dev zeroForOne toxic swap fills feePot0 only; feePot1 remains zero.
+    function test_FlowScore_FeePot_Token0AndToken1Separated() public {
+        _fundAndApprove(address(this), 10_000e18);
+
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 10e18, amountOutMin: 0, zeroForOne: true,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: address(this), deadline: block.timestamp + 1
+        });
+
+        (,,, uint256 fp0,,,,,) = hook.flowState(poolId);
+        (,,,, uint256 fp1,,,,) = hook.flowState(poolId);
+
+        assertGt(fp0, 0, "feePot0 should increase from token0-input toxic swap");
+        assertEq(fp1, 0, "feePot1 must not change from token0-input swap");
+    }
+
+    /// @dev Benign swap smaller than MIN_CASHBACK_TRADE_SIZE receives no cashback.
+    function test_FlowScore_NoCashbackBelowMinTradeSize() public {
+        _fundAndApprove(address(this), 10_000e18);
+
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 10e18, amountOutMin: 0, zeroForOne: true,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: address(this), deadline: block.timestamp + 1
+        });
+
+        (,,, uint256 fp0Before,,,,,) = hook.flowState(poolId);
+        assertGt(fp0Before, 0);
+
+        vm.roll(block.number + 1);
+
+        swapRouter.swapExactTokensForTokens({
+            amountIn: hook.MIN_CASHBACK_TRADE_SIZE() - 1,
+            amountOutMin: 0, zeroForOne: false,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: address(this), deadline: block.timestamp + 1
+        });
+
+        (,,, uint256 fp0After,,,,,) = hook.flowState(poolId);
+        assertEq(fp0After, fp0Before, "feePot must not decrease for sub-minimum trade");
+    }
+
     // ─────────────────────────────────────────────
     // INTEGRATION TESTS
     // ─────────────────────────────────────────────
@@ -355,6 +410,205 @@ contract FlowScoreHookTest is BaseTest {
         assertGt(received0, spent1 * 99 / 100);
     }
 
+    /// @dev Same sender cannot receive cashback twice in the same block.
+    function test_FlowScore_PerAddressCooldown_SameBlock() public {
+        _fundAndApprove(address(this), 10_000e18);
+
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 10e18, amountOutMin: 0, zeroForOne: true,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: address(this), deadline: block.timestamp + 1
+        });
+
+        vm.roll(block.number + 1);
+
+        (,,, uint256 fp0Start,,,,,) = hook.flowState(poolId);
+
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 1e18, amountOutMin: 0, zeroForOne: false,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: address(this), deadline: block.timestamp + 1
+        });
+
+        (,,, uint256 fp0Mid,,,,,) = hook.flowState(poolId);
+        assertLt(fp0Mid, fp0Start, "first benign swap should draw cashback");
+
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 1e18, amountOutMin: 0, zeroForOne: false,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: address(this), deadline: block.timestamp + 1
+        });
+
+        (,,, uint256 fp0End,,,,,) = hook.flowState(poolId);
+        assertEq(fp0End, fp0Mid, "second benign swap in same block by same sender must not draw cashback");
+    }
+
+    /// @dev Exact input swaps in both directions process correctly and update balances.
+    function test_FlowScore_ExactInput_BothDirections() public {
+        _fundAndApprove(address(this), 10_000e18);
+
+        uint256 bal0Before = currency0.balanceOfSelf();
+        uint256 bal1Before = currency1.balanceOfSelf();
+
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 5e18, amountOutMin: 0, zeroForOne: true,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: address(this), deadline: block.timestamp + 1
+        });
+
+        uint256 bal0Mid = currency0.balanceOfSelf();
+        uint256 bal1Mid = currency1.balanceOfSelf();
+        assertEq(bal0Before - bal0Mid, 5e18, "exact input: token0 spent must equal amountIn");
+        assertGt(bal1Mid, bal1Before, "token1 must increase");
+
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 5e18, amountOutMin: 0, zeroForOne: false,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: address(this), deadline: block.timestamp + 1
+        });
+
+        uint256 bal0Final = currency0.balanceOfSelf();
+        uint256 bal1Final = currency1.balanceOfSelf();
+        assertEq(bal1Mid - bal1Final, 5e18, "exact input: token1 spent must equal amountIn");
+        assertGt(bal0Final, bal0Mid, "token0 must increase");
+    }
+
+    /// @dev Exact output in both directions must route toxic fee contributions and benign cashback to the correct pots.
+    function test_FlowScore_ExactOutput_BothDirections() public {
+        _fundAndApprove(address(this), 20_000e18);
+        vm.roll(block.number + 1);
+
+        // zeroForOne exact output (token0 input) should increase feePot0 only.
+        swapRouter.swapTokensForExactTokens({
+            amountOut: 2e18, amountInMax: 20e18, zeroForOne: true,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: address(this), deadline: block.timestamp + 1
+        });
+        (,,, uint256 fp0a, uint256 fp1a,,,,) = hook.flowState(poolId);
+        assertGt(fp0a, 0, "exact output zeroForOne toxic swap must add to feePot0");
+        assertEq(fp1a, 0, "exact output zeroForOne must not touch feePot1");
+
+        // benign reverse exact output (token0 output) draws cashback only from feePot0.
+        vm.roll(block.number + 1);
+        swapRouter.swapTokensForExactTokens({
+            amountOut: 1e18, amountInMax: 20e18, zeroForOne: false,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: address(this), deadline: block.timestamp + 1
+        });
+        (,,, uint256 fp0b, uint256 fp1b,,,, uint256 paidAfterBenign0) = hook.flowState(poolId);
+        // Cashback can be zero if policy guards or rounding block payout. In all cases, no cross-token leakage.
+        assertLe(fp0b, fp0a, "token0 output path must not increase feePot0");
+        assertEq(fp1b, fp1a, "feePot1 must remain unchanged");
+        if (paidAfterBenign0 > 0) {
+            assertLt(fp0b, fp0a, "if cashback is paid for token0 output, it must come from feePot0");
+        }
+
+        // oneForZero exact output (token1 input) should increase feePot1 only.
+        vm.roll(block.number + 1);
+        swapRouter.swapTokensForExactTokens({
+            amountOut: 2e18, amountInMax: 20e18, zeroForOne: false,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: address(this), deadline: block.timestamp + 1
+        });
+        (,,, uint256 fp0c, uint256 fp1c,,,,) = hook.flowState(poolId);
+        assertEq(fp0c, fp0b, "token1-input exact output must not increase feePot0");
+        assertGt(fp1c, fp1b, "token1-input exact output toxic swap must increase feePot1");
+
+        // benign reverse exact output (token1 output) draws cashback only from feePot1.
+        vm.roll(block.number + 1);
+        (,,,,,,,, uint256 paidBeforeFinalLeg) = hook.flowState(poolId);
+        swapRouter.swapTokensForExactTokens({
+            amountOut: 1e18, amountInMax: 20e18, zeroForOne: true,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: address(this), deadline: block.timestamp + 1
+        });
+        (,,, uint256 fp0d, uint256 fp1d,,,, uint256 paidAfterBenign1) = hook.flowState(poolId);
+        if (paidAfterBenign1 > paidBeforeFinalLeg) {
+            assertEq(fp0d, fp0c, "cashback payout must not come from feePot0");
+            assertLt(fp1d, fp1c, "if cashback is paid for token1 output, it must come from feePot1");
+        } else {
+            // No cashback paid: swap may be toxic and add to input-token pot0, but must not draw from pot1.
+            assertGe(fp0d, fp0c, "without cashback, token0 pot may stay/increase");
+            assertEq(fp1d, fp1c, "without cashback, token1 pot must not be spent");
+        }
+    }
+
+    /// @dev Split-order cashback extraction is bounded by same-block cooldown, per-block cap and reserve protection.
+    function test_FlowScore_SplitOrderGaming_CapLimitsExtraction() public {
+        address a = makeAddr("split-a");
+        address b = makeAddr("split-b");
+        address c = makeAddr("split-c");
+        _fundAndApprove(a, 50_000e18);
+        _fundAndApprove(b, 50_000e18);
+        _fundAndApprove(c, 50_000e18);
+        vm.prank(a);
+        MockERC20(Currency.unwrap(currency0)).approve(address(swapRouter), type(uint256).max);
+        vm.prank(a);
+        MockERC20(Currency.unwrap(currency1)).approve(address(swapRouter), type(uint256).max);
+        vm.prank(b);
+        MockERC20(Currency.unwrap(currency0)).approve(address(swapRouter), type(uint256).max);
+        vm.prank(b);
+        MockERC20(Currency.unwrap(currency1)).approve(address(swapRouter), type(uint256).max);
+        vm.prank(c);
+        MockERC20(Currency.unwrap(currency0)).approve(address(swapRouter), type(uint256).max);
+        vm.prank(c);
+        MockERC20(Currency.unwrap(currency1)).approve(address(swapRouter), type(uint256).max);
+
+        vm.startPrank(a);
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 25e18, amountOutMin: 0, zeroForOne: true,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: a, deadline: block.timestamp + 1
+        });
+        vm.stopPrank();
+
+        vm.roll(block.number + 1);
+        (,,, uint256 potStart,,,,,) = hook.flowState(poolId);
+        assertGt(potStart, hook.MIN_FEE_POT_RESERVE(), "need non-trivial fee pot");
+        uint256 blockCapStart = potStart * hook.MAX_BLOCK_CASHBACK_BPS_OF_POT() / hook.BPS_DENOMINATOR();
+
+        vm.startPrank(a);
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 8e18, amountOutMin: 0, zeroForOne: false,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: a, deadline: block.timestamp + 1
+        });
+        (,,, uint256 potAfterFirst,,,,, uint256 paidAfterFirst) = hook.flowState(poolId);
+        assertLe(potAfterFirst, potStart, "first benign swap must not increase pot");
+
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 8e18, amountOutMin: 0, zeroForOne: false,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: a, deadline: block.timestamp + 1
+        });
+        (,,, uint256 potAfterSecond,,,,, uint256 paidAfterSecond) = hook.flowState(poolId);
+        vm.stopPrank();
+        assertEq(potAfterSecond, potAfterFirst, "same sender second same-block trade must not extract cashback");
+        assertEq(paidAfterSecond, paidAfterFirst, "same-block cooldown must prevent second payout");
+
+        vm.prank(b);
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 8e18, amountOutMin: 0, zeroForOne: false,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: b, deadline: block.timestamp + 1
+        });
+        (,,,,,,,, uint256 paidAfterThird) = hook.flowState(poolId);
+
+        vm.prank(c);
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 8e18, amountOutMin: 0, zeroForOne: false,
+            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
+            receiver: c, deadline: block.timestamp + 1
+        });
+        (,,, uint256 potEndSameBlock,,,,, uint256 paidEndSameBlock) = hook.flowState(poolId);
+
+        assertLe(paidAfterThird, blockCapStart, "paid cashback in block must stay within cap budget");
+        assertLe(paidEndSameBlock, blockCapStart, "total cashback in block must stay within cap budget");
+        assertLe(paidEndSameBlock, potStart - hook.MIN_FEE_POT_RESERVE(), "reserve must cap extractable cashback");
+        assertGe(potEndSameBlock, hook.MIN_FEE_POT_RESERVE(), "pot must not be drained below reserve");
+        assertLe(potEndSameBlock, potStart, "split extraction attempt must not increase pot");
+    }
+
     // ─────────────────────────────────────────────
     // FUZZ TESTS
     // ─────────────────────────────────────────────
@@ -366,7 +620,6 @@ contract FlowScoreHookTest is BaseTest {
 
         _fundAndApprove(address(this), 1000e18);
 
-        // Toxic swap - builds feePot
         swapRouter.swapExactTokensForTokens({
             amountIn: toxicSize,
             amountOutMin: 0,
@@ -377,7 +630,8 @@ contract FlowScoreHookTest is BaseTest {
             deadline: block.timestamp + 1
         });
 
-        // Benign swap - bounded by toxicSize to avoid overshoot
+        (,,, uint256 feePotAfterToxic,,,,,) = hook.flowState(poolId);
+
         swapRouter.swapExactTokensForTokens({
             amountIn: benignSize,
             amountOutMin: 0,
@@ -388,8 +642,8 @@ contract FlowScoreHookTest is BaseTest {
             deadline: block.timestamp + 1
         });
 
-        (,,, uint256 feePot,,,,,) = hook.flowState(poolId);
-        assertGe(feePot, 0);
+        (,,, uint256 feePotAfterBenign,,,,,) = hook.flowState(poolId);
+        assertLe(feePotAfterBenign, feePotAfterToxic, "feePot must not increase after benign swap");
     }
 
     /// @dev Total cashback paid out never exceeds total feePot accumulated.
