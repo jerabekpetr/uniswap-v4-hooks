@@ -19,6 +19,7 @@ trap cleanup EXIT INT TERM
 command -v anvil >/dev/null || { echo "[start-jit.sh] anvil nenalezen, nainstaluj Foundry." >&2; exit 1; }
 command -v forge >/dev/null || { echo "[start-jit.sh] forge nenalezen, nainstaluj Foundry." >&2; exit 1; }
 command -v python3 >/dev/null || { echo "[start-jit.sh] python3 nenalezen (potřeba pro FE server)." >&2; exit 1; }
+command -v jq >/dev/null || { echo "[start-jit.sh] jq nenalezen (potřeba pro parse adres)." >&2; exit 1; }
 
 if cast chain-id --rpc-url "$RPC_URL" >/dev/null 2>&1; then
     echo "[start-jit.sh] Port 8545 je obsazený — zastavuju starý proces…"
@@ -56,15 +57,18 @@ fi
 echo "[start-jit.sh] V4 adresy: $(cat frontend/v4-addresses.json)"
 
 echo "[start-jit.sh] Deploy Sentinel hooku…"
-HOOK_DEPLOY_OUT=$(forge script script/sentinel/00_DeployHook.s.sol \
-    --rpc-url "$RPC_URL" --broadcast --private-key "$PK" --json 2>/dev/null || true)
+forge script script/sentinel/00_DeployHook.s.sol \
+    --rpc-url "$RPC_URL" --broadcast --private-key "$PK" --json >/dev/null
 
-# Vytáhni adresu hooku z broadcast/ logu — spolehlivější než parse JSON
-HOOK_ADDR=$(jq -r '.transactions[] | select(.contractName=="SentinelJITGuardHook") | .contractAddress' \
-    broadcast/00_DeployHook.s.sol/31337/run-latest.json | head -n1)
+if [[ ! -f frontend/hook-sentinel.json ]]; then
+    echo "[start-jit.sh] frontend/hook-sentinel.json nebyl vygenerován." >&2
+    exit 1
+fi
+
+HOOK_ADDR=$(jq -r '.hook' frontend/hook-sentinel.json)
 
 if [[ -z "$HOOK_ADDR" || "$HOOK_ADDR" == "null" ]]; then
-    echo "[start-jit.sh] Nepodařilo se najít adresu hooku v broadcastu." >&2
+    echo "[start-jit.sh] Nepodařilo se najít adresu hooku v frontend/hook-sentinel.json." >&2
     exit 1
 fi
 echo "[start-jit.sh] Hook nasazen na: $HOOK_ADDR"

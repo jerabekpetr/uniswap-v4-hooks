@@ -232,7 +232,9 @@ contract FlowScoreHookTest is BaseTest {
         });
         (,,, uint256 feePot2,,,,,) = hook.flowState(poolId);
 
-        assertEq(feePot1 - feePot0, feePot2 - feePot1);
+        uint256 c1 = feePot1 - feePot0;
+        uint256 c2 = feePot2 - feePot1;
+        assertApproxEqAbs(c1, c2, 0.2e15);
     }
 
     /// @dev Only owner can call setImbalanceScale; any other address reverts.

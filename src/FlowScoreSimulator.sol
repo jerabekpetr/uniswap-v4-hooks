@@ -22,11 +22,15 @@ interface IFlowScoreHookLike {
         external
         view
         returns (
-            uint256 emaPrice,
+            int24 emaTick,
+            int256 signedFlowEma,
             int256 inventoryImbalance,
-            uint256 feePot,
+            uint256 feePot0,
+            uint256 feePot1,
             uint256 lastUpdated,
-            uint256 imbalanceScale
+            uint256 imbalanceScale,
+            uint48 bonusBlock,
+            uint256 blockBonusPaid
         );
     function setImbalanceScale(PoolKey calldata key, uint256 scale) external;
 }
@@ -130,7 +134,8 @@ contract FlowScoreSimulator {
         int24 upper = _alignTick(750 * TICK_SPACING);
         passiveTokenId = _mintPosition(poolKey, lower, upper, initialLiquidityPerToken, initialLiquidityPerToken);
         // MAX_FEE at 8 % imbalance of total pool (= 16 % of one side)
-        flowHook.setImbalanceScale(poolKey, initialLiquidityPerToken * 16 / 100);
+        // Owner-only on the hook in production; simulator setup should not fail if deployer keeps ownership.
+        try flowHook.setImbalanceScale(poolKey, initialLiquidityPerToken * 16 / 100) {} catch {}
         poolInitialized = true;
     }
 
@@ -142,16 +147,34 @@ contract FlowScoreSimulator {
         token1.mint(address(this), amountIn + 1e18);
 
         PoolId pid = poolKey.toId();
-        (, int256 imbalance, uint256 feePotBefore,, uint256 imbalanceScale) = flowHook.flowState(pid);
+        (, int256 signedFlowEmaBefore, int256 imbalance, uint256 feePot0Before, uint256 feePot1Before,, uint256 imbalanceScale,,) =
+            flowHook.flowState(pid);
 
         uint24 feeBps = _quoteFeeBps(imbalance, zeroForOne, amountIn, imbalanceScale);
         bool toxic = feeBps > BASE_FEE;
         uint256 feePaid = (amountIn * feeBps) / FEE_DENOMINATOR;
 
         uint256 amountOut = _swap(zeroForOne, amountIn);
-        (,, uint256 feePotAfter,,) = flowHook.flowState(pid);
-        uint256 feePotAdded = feePotAfter > feePotBefore ? feePotAfter - feePotBefore : 0;
-        uint256 feePotUsed = feePotBefore > feePotAfter ? feePotBefore - feePotAfter : 0;
+        (, int256 signedFlowEmaAfter,,,,,,,) = flowHook.flowState(pid);
+        (, , , uint256 feePot0After, uint256 feePot1After,,,,) = flowHook.flowState(pid);
+
+        uint256 totalBefore = feePot0Before + feePot1Before;
+        uint256 totalAfter = feePot0After + feePot1After;
+
+        uint256 feePotAdded = totalAfter > totalBefore ? totalAfter - totalBefore : 0;
+        uint256 feePotUsed = totalBefore > totalAfter ? totalBefore - totalAfter : 0;
+
+        // Prefer observed pot movement as source of truth for toxicity in simulator reporting.
+        if (feePotAdded > 0) {
+            toxic = true;
+            uint256 baseFeeAmount = (amountIn * BASE_FEE) / FEE_DENOMINATOR;
+            // toxic surcharge contribution is 50% of the extra fee => extra = 2 * contribution
+            feePaid = baseFeeAmount + (2 * feePotAdded);
+        } else if (!toxic) {
+            int256 flowAbsAfter = signedFlowEmaAfter >= 0 ? signedFlowEmaAfter : -signedFlowEmaAfter;
+            int256 flowAbsBefore = signedFlowEmaBefore >= 0 ? signedFlowEmaBefore : -signedFlowEmaBefore;
+            if (flowAbsAfter > flowAbsBefore && feePotAdded > 0) toxic = true;
+        }
 
         info = LastSwapInfo({
             exists: true,
@@ -185,7 +208,8 @@ contract FlowScoreSimulator {
             share0Bps = (reserve0 * BPS_DENOMINATOR) / total;
             share1Bps = BPS_DENOMINATOR - share0Bps;
         }
-        (,, feePotBalance,,) = flowHook.flowState(poolKey.toId());
+        (, , , uint256 feePot0, uint256 feePot1,,, ,) = flowHook.flowState(poolKey.toId());
+        feePotBalance = feePot0 + feePot1;
         info = lastSwap;
     }
 

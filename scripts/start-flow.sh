@@ -60,11 +60,15 @@ echo "[start-flow.sh] Deploy FlowScore hooku…"
 forge script script/flowscore/00_DeployHook.s.sol \
     --rpc-url "$RPC_URL" --broadcast --private-key "$PK" --json >/dev/null
 
-HOOK_ADDR=$(jq -r '.transactions[] | select(.contractName=="FlowScoreHook") | .contractAddress' \
-    broadcast/00_DeployHook.s.sol/31337/run-latest.json | head -n1)
+if [[ ! -f frontend/hook-flow.json ]]; then
+    echo "[start-flow.sh] frontend/hook-flow.json nebyl vygenerován." >&2
+    exit 1
+fi
+
+HOOK_ADDR=$(jq -r '.hook' frontend/hook-flow.json)
 
 if [[ -z "$HOOK_ADDR" || "$HOOK_ADDR" == "null" ]]; then
-    echo "[start-flow.sh] Nepodařilo se najít adresu hooku v broadcastu." >&2
+    echo "[start-flow.sh] Nepodařilo se najít adresu hooku v frontend/hook-flow.json." >&2
     exit 1
 fi
 echo "[start-flow.sh] Hook nasazen na: $HOOK_ADDR"

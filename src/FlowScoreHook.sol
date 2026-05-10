@@ -56,7 +56,7 @@ contract FlowScoreHook is BaseHook {
     uint256 public constant WEIGHT_SIZE_BPS = 4_000;
     uint256 public constant WEIGHT_FLOW_BPS = 3_000;
     uint256 public constant WEIGHT_DEVIATION_BPS = 3_000;
-    uint256 public constant SIZE_SCALE = 1e18; // reference swap size for size score normalisation
+    uint256 public constant SIZE_SCALE = 10e18; // reference swap size for size score normalisation
     uint256 public constant DEVIATION_SCALE_TICKS = 200; // tick deviation at which score is capped
 
     //anti-gaming constants.
