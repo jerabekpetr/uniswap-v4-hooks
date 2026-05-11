@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.30;
 
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
@@ -10,27 +10,95 @@ import {BalanceDelta, BalanceDeltaLibrary, toBalanceDelta} from "v4-core/src/typ
 import {ModifyLiquidityParams, SwapParams} from "v4-core/src/types/PoolOperation.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 
+/// @title SentinelJITGuardHook
+/// @author Petr Jeřábek
+/// @notice A Uniswap v4 hook that deters just-in-time (JIT) liquidity attacks by applying
+///         an adaptive penalty when liquidity is removed shortly after being deposited.
+/// @dev The penalty is a function of position age (blocks held), tick range width,
+///      out-of-range distance, and a rolling per-pool volatility estimate.
+///      Penalised tokens are donated back to the pool, benefiting passive LPs.
 contract SentinelJITGuardHook is BaseHook {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
 
     // ─────────────────────────────────────────────
+    // Types
+    // ─────────────────────────────────────────────
+
+    /// @notice Metadata tracked for each open liquidity position.
+    struct PositionData {
+        /// @dev Block number at which this position slot was last opened or topped up.
+        uint48 addedAtBlock;
+        /// @dev Lower tick of the position range.
+        int24 tickLower;
+        /// @dev Upper tick of the position range.
+        int24 tickUpper;
+        /// @dev Pool tick at the time of the most recent deposit.
+        int24 entryTick;
+        /// @dev Current net liquidity tracked by the hook.
+        uint128 liquidity;
+        /// @dev Lifetime total liquidity added to this slot.
+        uint128 cumulativeAdded;
+        /// @dev Lifetime total liquidity removed from this slot.
+        uint128 cumulativeRemoved;
+    }
+
+    /// @notice Rolling volatility state maintained per pool.
+    struct PoolVolatilityState {
+        /// @dev True once the first swap has been observed.
+        bool initialized;
+        /// @dev Tick recorded after the most recent swap, used to compute the next absolute move.
+        int24 lastTick;
+        /// @dev EMA of absolute tick-move per swap, scaled by 1e18 (80/20 decay).
+        uint256 sigmaX18;
+        /// @dev Block number of the last volatility update.
+        uint256 lastUpdatedBlock;
+    }
+
+    // ─────────────────────────────────────────────
     // Constants
     // ─────────────────────────────────────────────
 
+    /// @notice Basis-point denominator (10 000 = 100%).
     uint256 public constant BPS = 10_000;
-    uint256 public constant BASE_PENALTY_BPS = 3_000; // 30% base penalty on deposited liquidity
-    uint256 public constant MAX_PENALTY_BPS = 3_000; // max from the age/width/distance factors
-    uint256 public constant GRACE_BLOCKS = 20; // no penalty after this many blocks
-    uint256 public constant REFERENCE_WIDTH_TICKS = 600; // tight-range threshold
-    uint256 public constant ACTIVE_DISTANCE_TICKS = 600; // out-of-range penalty decay threshold
-    uint256 public constant MAX_VOL_BOOST_BPS = 5_000; // up to +50% additional penalty from volatility
-    uint256 public constant VOL_SCALE = 100; // sigma (in ticks) at which vol boost reaches MAX_VOL_BOOST_BPS
+
+    /// @notice Base penalty applied to principal at block 0 before other factors (30%).
+    uint256 public constant BASE_PENALTY_BPS = 3_000;
+
+    /// @notice Maximum combined contribution of age, width, and distance factors (30%).
+    uint256 public constant MAX_PENALTY_BPS = 3_000;
+
+    /// @notice Number of blocks after which no penalty is applied.
+    uint256 public constant GRACE_BLOCKS = 20;
+
+    /// @notice Tick-range width at or below which the width factor is at its maximum.
+    uint256 public constant REFERENCE_WIDTH_TICKS = 600;
+
+    /// @notice Out-of-range distance in ticks beyond which the active-distance factor is zero.
+    uint256 public constant ACTIVE_DISTANCE_TICKS = 600;
+
+    /// @notice Maximum additional penalty from the volatility boost (50%).
+    uint256 public constant MAX_VOL_BOOST_BPS = 5_000;
+
+    /// @notice Rolling-sigma value (in ticks, scaled by 1e18) at which the vol boost is maximised.
+    uint256 public constant VOL_SCALE = 100;
 
     // ─────────────────────────────────────────────
     // Events
     // ─────────────────────────────────────────────
 
+    /// @notice Position metadata, keyed by pool ID then position key hash.
+    mapping(PoolId poolId => mapping(bytes32 posKey => PositionData)) public positions;
+
+    /// @notice Per-pool rolling volatility state.
+    mapping(PoolId poolId => PoolVolatilityState state) public volatility;
+
+    /// @notice Emitted when liquidity is added and a position slot is created or updated.
+    /// @param poolId The pool in which liquidity was added.
+    /// @param positionKey Hash identifying the position (owner, ticks, salt).
+    /// @param sender The address that triggered the add.
+    /// @param addedAtBlock Block number recorded as the deposit timestamp.
+    /// @param liquidity Current tracked liquidity for this position slot.
     event LiquidityTracked(
         PoolId indexed poolId,
         bytes32 indexed positionKey,
@@ -39,11 +107,23 @@ contract SentinelJITGuardHook is BaseHook {
         uint128 liquidity
     );
 
+    /// @notice Emitted when a JIT penalty is applied to a removal.
+    /// @param poolId The pool in which the removal occurred.
+    /// @param positionKey Hash identifying the position.
+    /// @param sender The effective owner of the position.
+    /// @param penalty0 Token0 amount penalised.
+    /// @param penalty1 Token1 amount penalised.
     event JITPenaltyApplied(
         PoolId indexed poolId, bytes32 indexed positionKey, address indexed sender, int128 penalty0, int128 penalty1
     );
 
-    // Emitted whenever a penalty is computed, with context to audit the decision.
+    /// @notice Emitted whenever a penalty is computed, providing audit context for the decision.
+    /// @param poolId The pool in which the removal occurred.
+    /// @param positionKey Hash identifying the position.
+    /// @param penaltyBps The total penalty in basis points.
+    /// @param positionAgeBlocks Number of blocks the position was held.
+    /// @param rangeWidth Tick range width of the position.
+    /// @param activeTickDistance Distance from the current tick to the nearest range boundary (zero if in-range).
     event PenaltyDecision(
         PoolId indexed poolId,
         bytes32 indexed positionKey,
@@ -53,75 +133,29 @@ contract SentinelJITGuardHook is BaseHook {
         int24 activeTickDistance
     );
 
-    // Emitted after each swap when volatility state is updated.
+    /// @notice Emitted after each swap when the per-pool volatility state is updated.
+    /// @param poolId The pool whose volatility was updated.
+    /// @param sigmaX18 The updated EMA sigma value, scaled by 1e18.
+    /// @param lastTick The current tick recorded for the next sigma calculation.
     event VolatilityUpdated(PoolId indexed poolId, uint256 sigmaX18, int24 lastTick);
 
     // ─────────────────────────────────────────────
     // Errors
     // ─────────────────────────────────────────────
 
+    /// @notice Reverted when a removal is attempted for a position that has no tracked deposit.
     error PositionNotFound();
-
-    // ─────────────────────────────────────────────
-    // Storage
-    // ─────────────────────────────────────────────
-
-    // extended PositionData with tick range stored on add.
-    struct PositionData {
-        uint48 addedAtBlock;
-        int24 tickLower;
-        int24 tickUpper;
-        int24 entryTick;
-        uint128 liquidity;
-        uint128 cumulativeAdded;
-        uint128 cumulativeRemoved;
-    }
-
-    // per-pool rolling volatility estimate.
-    struct PoolVolatilityState {
-        bool initialized;
-        int24 lastTick;
-        uint256 sigmaX18; // EMA of absolute tick-move per swap, scaled by 1e18
-        uint256 lastUpdatedBlock;
-    }
-
-    mapping(PoolId => mapping(bytes32 => PositionData)) public positions;
-    mapping(PoolId => PoolVolatilityState) public volatility;
-
-    // ─────────────────────────────────────────────
-    // Helpers
-    // ─────────────────────────────────────────────
-
-    /// @notice Derives a unique position key from owner, tick range, and salt.
-    function _positionKey(address owner, int24 tickLower, int24 tickUpper, bytes32 salt)
-        internal
-        pure
-        returns (bytes32)
-    {
-        return keccak256(abi.encodePacked(owner, tickLower, tickUpper, salt));
-    }
-
-    /// @notice resolves the effective position owner from hookData.
-    /// Decodes a 32-byte ABI-encoded address or a raw 20-byte address; falls back to sender.
-    function _effectiveOwner(address sender, bytes calldata hookData) internal pure returns (address) {
-        if (hookData.length >= 32) return abi.decode(hookData, (address));
-        if (hookData.length >= 20) {
-            address a;
-            assembly {
-                a := shr(96, calldataload(hookData.offset))
-            }
-            return a;
-        }
-        return sender;
-    }
 
     // ─────────────────────────────────────────────
     // Constructor / permissions
     // ─────────────────────────────────────────────
 
+    /// @notice Deploys the hook and wires it to the given pool manager.
+    /// @param _pm The Uniswap v4 pool manager.
     constructor(IPoolManager _pm) BaseHook(_pm) {}
 
     /// @notice Returns the set of hook callbacks this hook uses.
+    /// @return permissions Struct indicating which hook callbacks are active.
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
             beforeInitialize: false,
@@ -145,8 +179,15 @@ contract SentinelJITGuardHook is BaseHook {
     // Callbacks
     // ─────────────────────────────────────────────
 
-    /// @notice Records deposit block, tick range, and liquidity for a position.
-    /// Refreshes addedAtBlock and entryTick on subsequent adds to the same slot.
+    /// @notice Records the deposit block, tick range, and liquidity for a position.
+    /// @dev Refreshes addedAtBlock and entryTick on subsequent adds to the same slot,
+    ///      effectively resetting the JIT clock.
+    /// @param sender The address that called the position manager.
+    /// @param key The pool key.
+    /// @param params Liquidity modification parameters (ticks, delta, salt).
+    /// @param hookData Optional bytes encoding the effective owner address.
+    /// @return selector The afterAddLiquidity selector.
+    /// @return hookDelta Zero delta (this hook does not redirect tokens on add).
     function _afterAddLiquidity(
         address sender,
         PoolKey calldata key,
@@ -185,9 +226,19 @@ contract SentinelJITGuardHook is BaseHook {
         return (BaseHook.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
-    /// @notice Applies an adaptive penalty when liquidity is removed shortly after deposit.
-    /// Penalty decays with age, range width, out-of-range distance, and a volatility boost.
-    /// Penalty tokens are donated back to the pool.
+    /// @notice Applies an adaptive penalty when liquidity is removed within the grace period.
+    /// @dev Penalty factors: age (linear decay over GRACE_BLOCKS), width (narrow = higher penalty),
+    ///      active-distance (in-range = higher penalty), and volatility boost.
+    ///      The penalty is applied to the principal only; accrued fees are also fully penalised
+    ///      when a penalty is active. All penalised tokens are donated back to the pool.
+    /// @param sender The address that triggered the removal.
+    /// @param key The pool key.
+    /// @param params Liquidity modification parameters.
+    /// @param delta Actual token deltas from the core removal (principal + fees).
+    /// @param feesAccrued The fees component of delta.
+    /// @param hookData Optional bytes encoding the effective owner address.
+    /// @return selector The afterRemoveLiquidity selector.
+    /// @return hookDelta Positive amounts represent tokens redirected away from the LP (penalty).
     function _afterRemoveLiquidity(
         address sender,
         PoolKey calldata key,
@@ -285,8 +336,12 @@ contract SentinelJITGuardHook is BaseHook {
         return (BaseHook.afterRemoveLiquidity.selector, toBalanceDelta(penalty0, penalty1));
     }
 
-    /// @notice updates the per-pool rolling volatility estimate after each swap.
-    /// sigma is an EMA of absolute tick-moves (80/20 decay), scaled by 1e18.
+    /// @notice Updates the per-pool rolling volatility estimate after each swap.
+    /// @dev sigma is an EMA of absolute tick-moves with an 80/20 decay, scaled by 1e18.
+    ///      The first swap initialises the state without contributing a move sample.
+    /// @param key The pool key.
+    /// @return selector The afterSwap selector.
+    /// @return hookDelta Zero (this hook does not redirect tokens on swaps).
     function _afterSwap(address, PoolKey calldata key, SwapParams calldata, BalanceDelta, bytes calldata)
         internal
         override
@@ -311,5 +366,40 @@ contract SentinelJITGuardHook is BaseHook {
 
         emit VolatilityUpdated(pid, vol.sigmaX18, currentTick);
         return (BaseHook.afterSwap.selector, 0);
+    }
+
+    // ─────────────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────────────
+
+    /// @notice Derives a unique position key from owner, tick range, and salt.
+    /// @param owner The effective owner address of the position.
+    /// @param tickLower The lower tick of the position range.
+    /// @param tickUpper The upper tick of the position range.
+    /// @param salt Arbitrary salt encoded in the position NFT (token ID as bytes32).
+    /// @return A keccak256 hash uniquely identifying the position slot.
+    function _positionKey(address owner, int24 tickLower, int24 tickUpper, bytes32 salt)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encodePacked(owner, tickLower, tickUpper, salt));
+    }
+
+    /// @notice Resolves the effective position owner from optional hookData.
+    /// @dev Decodes a 32-byte ABI-encoded address or a raw 20-byte address; falls back to sender.
+    /// @param sender The msg.sender forwarded by the pool manager.
+    /// @param hookData Optional bytes that may encode the real owner address.
+    /// @return The effective owner address.
+    function _effectiveOwner(address sender, bytes calldata hookData) internal pure returns (address) {
+        if (hookData.length >= 32) return abi.decode(hookData, (address));
+        if (hookData.length >= 20) {
+            address a;
+            assembly {
+                a := shr(96, calldataload(hookData.offset))
+            }
+            return a;
+        }
+        return sender;
     }
 }

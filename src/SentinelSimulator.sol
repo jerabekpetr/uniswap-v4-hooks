@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.30;
 
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -18,6 +18,12 @@ import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 
+/// @title SentinelSimulator
+/// @author Petr Jeřábek
+/// @notice Testing and simulation harness for the SentinelJITGuardHook.
+/// @dev Maintains two identical pools — one with the hook attached and one without —
+///      so that JIT attack scenarios can be compared side-by-side. Intended for use
+///      in Foundry tests and deployment scripts only — not production code.
 contract SentinelSimulator {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -27,29 +33,66 @@ contract SentinelSimulator {
     using Actions for IPositionManager;
     using FullMath for uint256;
 
-    uint24 public constant FEE = 3000;
-    int24 public constant TICK_SPACING = 60;
-    uint160 public constant SQRT_PRICE_1_1 = 2 ** 96;
-
-    IPoolManager public immutable poolManager;
-    IPositionManager public immutable positionManager;
-    IUniswapV4Router04 public immutable swapRouter;
-    IPermit2 public immutable permit2;
-    MockERC20 public immutable token0;
-    MockERC20 public immutable token1;
-    IHooks public immutable sentinelHook;
-
-    PoolKey public poolWithHookKey;
-    PoolKey public poolNoHookKey;
-
+    /// @notice Outcome of a single runScenario call.
     struct ScenarioResult {
+        /// @dev Net token0 gain/loss for the passive LP (fees earned, expressed as signed delta).
         int256 passiveLPDelta0;
+        /// @dev Net token1 gain/loss for the passive LP.
         int256 passiveLPDelta1;
+        /// @dev Net token0 gain/loss for the JIT attacker (returned minus spent).
         int256 jitDelta0;
+        /// @dev Net token1 gain/loss for the JIT attacker.
         int256 jitDelta1;
+        /// @dev Amount of token1 received by the swap.
         uint256 swapAmountOut;
     }
 
+    /// @notice Fee tier used for both simulated pools (0.30%).
+    uint24 public constant FEE = 3000;
+
+    /// @notice Tick spacing used for both simulated pools.
+    int24 public constant TICK_SPACING = 60;
+
+    /// @notice Starting sqrt price corresponding to a 1:1 token ratio.
+    uint160 public constant SQRT_PRICE_1_1 = 2 ** 96;
+
+    /// @notice The Uniswap v4 pool manager.
+    IPoolManager public immutable poolManager;
+
+    /// @notice The Uniswap v4 position manager (ERC-721 NFT positions).
+    IPositionManager public immutable positionManager;
+
+    /// @notice The swap router used to execute test swaps.
+    IUniswapV4Router04 public immutable swapRouter;
+
+    /// @notice The Permit2 contract used to approve token transfers.
+    IPermit2 public immutable permit2;
+
+    /// @notice The lower-address token in the pool pair.
+    MockERC20 public immutable token0;
+
+    /// @notice The higher-address token in the pool pair.
+    MockERC20 public immutable token1;
+
+    /// @notice The SentinelJITGuardHook instance being tested.
+    IHooks public immutable sentinelHook;
+
+    /// @notice Pool key for the pool that has the sentinel hook attached.
+    PoolKey public poolWithHookKey;
+
+    /// @notice Pool key for the baseline pool with no hook.
+    PoolKey public poolNoHookKey;
+
+    /// @notice Deploys the simulator and initialises both pools.
+    /// @dev Attempts to initialise both pools in the constructor so they are ready
+    ///      immediately when the pool manager is already deployed (useful in test envs).
+    /// @param _poolManager The Uniswap v4 pool manager.
+    /// @param _positionManager The position manager.
+    /// @param _swapRouter The swap router.
+    /// @param _permit2 The Permit2 contract.
+    /// @param _token0 The lower-address token.
+    /// @param _token1 The higher-address token.
+    /// @param _sentinelHook The SentinelJITGuardHook to attach to the hooked pool.
     constructor(
         IPoolManager _poolManager,
         IPositionManager _positionManager,
@@ -76,7 +119,9 @@ contract SentinelSimulator {
             PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: TICK_SPACING, hooks: IHooks(address(0))});
 
         if (address(poolManager).code.length > 0) {
+            // solhint-disable-next-line no-empty-blocks
             try _poolManager.initialize(poolWithHookKey, SQRT_PRICE_1_1) {} catch {}
+            // solhint-disable-next-line no-empty-blocks
             try _poolManager.initialize(poolNoHookKey, SQRT_PRICE_1_1) {} catch {}
         }
 
@@ -88,14 +133,18 @@ contract SentinelSimulator {
         // _permit2.approve(address(_token1), address(_positionManager), type(uint160).max, type(uint48).max);
     }
 
-    function poolWithHookId() external view returns (PoolId) {
-        return poolWithHookKey.toId();
-    }
-
-    function poolNoHookId() external view returns (PoolId) {
-        return poolNoHookKey.toId();
-    }
-
+    /// @notice Runs a complete JIT attack scenario and returns the outcome for all participants.
+    /// @dev Mints tokens, optionally seeds passive liquidity, optionally executes a JIT add
+    ///      immediately before the swap and a JIT remove immediately after, then measures
+    ///      passive LP fee earnings and JIT P&L.
+    /// @param passiveToken0 Token0 amount for the wide-range passive LP position.
+    /// @param passiveToken1 Token1 amount for the wide-range passive LP position.
+    /// @param jitToken0 Token0 amount for the narrow JIT position.
+    /// @param jitToken1 Token1 amount for the narrow JIT position.
+    /// @param swapAmountIn Token0 input amount for the simulated swap.
+    /// @param useHook True to run the scenario against the hooked pool; false for the baseline pool.
+    /// @param useJIT True to include a JIT add/remove sandwich around the swap.
+    /// @return result Deltas for the passive LP and JIT attacker, plus swap output.
     function runScenario(
         uint256 passiveToken0,
         uint256 passiveToken1,
@@ -165,12 +214,27 @@ contract SentinelSimulator {
         }
     }
 
-    ////////////////// Helper functions /////////////////
-
-    function _alignTick(int24 tick) internal pure returns (int24) {
-        return (tick / TICK_SPACING) * TICK_SPACING;
+    /// @notice Returns the pool ID for the pool that has the sentinel hook attached.
+    /// @return The PoolId of the hooked pool.
+    function poolWithHookId() external view returns (PoolId) {
+        return poolWithHookKey.toId();
     }
 
+    /// @notice Returns the pool ID for the baseline pool with no hook.
+    /// @return The PoolId of the hook-free pool.
+    function poolNoHookId() external view returns (PoolId) {
+        return poolNoHookKey.toId();
+    }
+
+    ////////////////// Helper functions /////////////////
+
+    /// @notice Mints a position via the position manager and returns the assigned token ID.
+    /// @param poolKey The pool key.
+    /// @param tickLower Lower tick of the range.
+    /// @param tickUpper Upper tick of the range.
+    /// @param amount0Desired Desired token0 deposit.
+    /// @param amount1Desired Desired token1 deposit.
+    /// @return tokenId The ERC-721 token ID assigned to the new position.
     function _mintPosition(
         PoolKey memory poolKey,
         int24 tickLower,
@@ -205,6 +269,8 @@ contract SentinelSimulator {
         positionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 60);
     }
 
+    /// @notice Burns a position NFT and collects all tokens via TAKE_PAIR.
+    /// @param tokenId The ERC-721 token ID to burn.
     function _decreaseLiquidity(uint256 tokenId) internal {
         bytes memory actions = abi.encodePacked(uint8(Actions.BURN_POSITION), uint8(Actions.TAKE_PAIR));
         bytes[] memory params = new bytes[](2);
@@ -213,6 +279,10 @@ contract SentinelSimulator {
         positionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 60);
     }
 
+    /// @notice Executes an exact-input zeroForOne swap through the router and returns the output amount.
+    /// @param poolKey The pool to swap in.
+    /// @param amountIn Token0 input amount.
+    /// @return amountOut Token1 received after the swap.
     function _swap(PoolKey memory poolKey, uint256 amountIn) internal returns (uint256 amountOut) {
         uint256 before = token1.balanceOf(address(this));
         swapRouter.swapExactTokensForTokens({
@@ -227,6 +297,13 @@ contract SentinelSimulator {
         amountOut = token1.balanceOf(address(this)) - before;
     }
 
+    /// @notice Computes the fee growth accrued to a passive LP position since it was opened.
+    /// @param poolId The pool identifier.
+    /// @param tickLower Lower tick of the position range.
+    /// @param tickUpper Upper tick of the position range.
+    /// @param tokenId The ERC-721 token ID (used as salt for the position key).
+    /// @return fees0 Token0 fees accrued.
+    /// @return fees1 Token1 fees accrued.
     function _computePassiveFees(PoolId poolId, int24 tickLower, int24 tickUpper, uint256 tokenId)
         internal
         view
@@ -243,5 +320,12 @@ contract SentinelSimulator {
 
         fees0 = int256(FullMath.mulDiv(delta0, liquidity, 1 << 128));
         fees1 = int256(FullMath.mulDiv(delta1, liquidity, 1 << 128));
+    }
+
+    /// @notice Rounds a tick down to the nearest multiple of TICK_SPACING.
+    /// @param tick The raw tick value.
+    /// @return The aligned tick.
+    function _alignTick(int24 tick) internal pure returns (int24) {
+        return (tick / TICK_SPACING) * TICK_SPACING;
     }
 }

@@ -1,0 +1,20 @@
+{
+  "extends": "solhint:recommended",
+  "rules": {
+    "compiler-version": ["error", "0.8.30"],
+    "func-visibility": ["error", { "ignoreConstructors": true }],
+    "no-empty-blocks": "warn",
+    "reason-string": "off",
+    "named-parameters-mapping": "warn",
+    "ordering": "warn",
+    "no-unused-import": "warn",
+    "immutable-vars-naming": ["warn", { "immutablesAsConstants": false }],
+    "gas-custom-errors": "off",
+    "avoid-call-value": "off",
+    "import-path-check": "off",
+    "gas-strict-inequalities": "off",
+    "gas-struct-packing": "off",
+    "no-inline-assembly": "off",
+    "function-max-lines": ["warn", 120]
+  }
+}

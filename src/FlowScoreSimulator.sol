@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.30;
 
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -17,8 +17,27 @@ import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 
+/// @title IFlowScoreHookLike
+/// @author Petr Jeřábek
+/// @notice Minimal interface exposing the FlowScoreHook state needed by the simulator.
 interface IFlowScoreHookLike {
-    function flowState(PoolId)
+    /// @notice Sets the imbalance scale for a pool (owner-only on the real hook).
+    /// @param key The pool key.
+    /// @param scale The new imbalance scale.
+    function setImbalanceScale(PoolKey calldata key, uint256 scale) external;
+
+    /// @notice Returns the full flow state for a given pool.
+    /// @param pid The pool identifier.
+    /// @return emaTick EMA of the pool tick.
+    /// @return signedFlowEma EMA of signed swap flow.
+    /// @return inventoryImbalance Current signed inventory imbalance.
+    /// @return feePot0 Accumulated surcharge in token0.
+    /// @return feePot1 Accumulated surcharge in token1.
+    /// @return lastUpdated Timestamp of the most recent update.
+    /// @return imbalanceScale The imbalance scale configured for this pool.
+    /// @return bonusBlock Last block in which cashback was distributed.
+    /// @return blockBonusPaid Total cashback paid in bonusBlock.
+    function flowState(PoolId pid)
         external
         view
         returns (
@@ -32,9 +51,14 @@ interface IFlowScoreHookLike {
             uint48 bonusBlock,
             uint256 blockBonusPaid
         );
-    function setImbalanceScale(PoolKey calldata key, uint256 scale) external;
 }
 
+/// @title FlowScoreSimulator
+/// @author Petr Jeřábek
+/// @notice Testing and simulation harness for the FlowScoreHook.
+/// @dev Deploys a single pool with the FlowScoreHook attached, provides liquidity,
+///      and exposes helpers to execute swaps and inspect hook state. Intended for
+///      use in Foundry tests and deployment scripts only — not production code.
 contract FlowScoreSimulator {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -42,45 +66,106 @@ contract FlowScoreSimulator {
     using LiquidityAmounts for uint160;
     using Actions for IPositionManager;
 
-    error PoolAlreadyInitialized();
-    error ZeroLiquidity();
-    error PoolNotInitialized();
-    error ZeroSwapAmount();
-
-    uint24 public constant MAX_FEE = 10000;
-    uint24 public constant MIN_FEE = 500;
-    uint24 public constant BASE_FEE = 3000;
-    uint256 public constant FEE_DENOMINATOR = 1_000_000;
-    uint256 public constant MAX_CASHBACK_BPS = 35;
-    uint256 public constant BPS_DENOMINATOR = 10000;
-    int24 public constant TICK_SPACING = 60;
-    uint160 public constant SQRT_PRICE_1_1 = 2 ** 96;
-
-    IPoolManager public immutable poolManager;
-    IPositionManager public immutable positionManager;
-    IUniswapV4Router04 public immutable swapRouter;
-    IPermit2 public immutable permit2;
-    MockERC20 public immutable token0;
-    MockERC20 public immutable token1;
-    IFlowScoreHookLike public immutable flowHook;
-
-    PoolKey public poolKey;
-    bool public poolInitialized;
-    uint256 public passiveTokenId;
-
+    /// @notice Snapshot of data from the most recently executed swap.
     struct LastSwapInfo {
+        /// @dev True once at least one swap has been executed.
         bool exists;
+        /// @dev True when token0 was swapped for token1.
         bool zeroForOne;
+        /// @dev True when the swap was classified as toxic.
         bool toxic;
+        /// @dev Amount of input token consumed.
         uint256 amountIn;
+        /// @dev Estimated fee paid (including toxic surcharge if applicable).
         uint256 feePaid;
+        /// @dev Net amount added to the fee pot by this swap.
         uint256 feePotAdded;
+        /// @dev Net amount drawn from the fee pot by this swap (cashback).
         uint256 feePotUsed;
+        /// @dev Amount of output token received.
         uint256 amountOut;
     }
 
+    /// @notice Maximum dynamic fee (1.00%).
+    uint24 public constant MAX_FEE = 10000;
+
+    /// @notice Minimum dynamic fee (0.05%).
+    uint24 public constant MIN_FEE = 500;
+
+    /// @notice Baseline fee (0.30%).
+    uint24 public constant BASE_FEE = 3000;
+
+    /// @notice Denominator for fee-unit calculations (parts per million).
+    uint256 public constant FEE_DENOMINATOR = 1_000_000;
+
+    /// @notice Maximum cashback in basis points of the swap size (0.35%).
+    uint256 public constant MAX_CASHBACK_BPS = 35;
+
+    /// @notice Basis-point denominator.
+    uint256 public constant BPS_DENOMINATOR = 10000;
+
+    /// @notice Tick spacing used for the simulated pool.
+    int24 public constant TICK_SPACING = 60;
+
+    /// @notice Starting sqrt price corresponding to a 1:1 token ratio.
+    uint160 public constant SQRT_PRICE_1_1 = 2 ** 96;
+
+    /// @notice The Uniswap v4 pool manager.
+    IPoolManager public immutable poolManager;
+
+    /// @notice The Uniswap v4 position manager (ERC-721 NFT positions).
+    IPositionManager public immutable positionManager;
+
+    /// @notice The swap router used to execute test swaps.
+    IUniswapV4Router04 public immutable swapRouter;
+
+    /// @notice The Permit2 contract used to approve token transfers.
+    IPermit2 public immutable permit2;
+
+    /// @notice The lower-address token in the pool pair.
+    MockERC20 public immutable token0;
+
+    /// @notice The higher-address token in the pool pair.
+    MockERC20 public immutable token1;
+
+    /// @notice The FlowScoreHook instance attached to the simulated pool.
+    IFlowScoreHookLike public immutable flowHook;
+
+    /// @notice The pool key for the simulated FlowScoreHook pool.
+    PoolKey public poolKey;
+
+    /// @notice True once initializePool has been called successfully.
+    bool public poolInitialized;
+
+    /// @notice Token ID of the passive liquidity position minted during initialisation.
+    uint256 public passiveTokenId;
+
+    /// @notice Data from the most recently executed swap.
     LastSwapInfo public lastSwap;
 
+    /// @notice Reverted when initializePool is called on an already-initialised simulator.
+    error PoolAlreadyInitialized();
+
+    /// @notice Reverted when initializePool is called with zero initial liquidity.
+    error ZeroLiquidity();
+
+    /// @notice Reverted when executeSwap is called before initializePool.
+    error PoolNotInitialized();
+
+    /// @notice Reverted when executeSwap is called with a zero amount.
+    error ZeroSwapAmount();
+
+    /// @notice Deploys the simulator and wires all dependencies.
+    /// @dev Approves the swap router for both tokens. Attempts to initialise the pool
+    ///      in the constructor so that the hook's afterInitialize runs immediately if
+    ///      the pool manager is already deployed (useful in test environments).
+    /// @param _poolManager The Uniswap v4 pool manager.
+    /// @param _positionManager The position manager.
+    /// @param _swapRouter The swap router.
+    /// @param _permit2 The Permit2 contract.
+    /// @param _token0 The lower-address token.
+    /// @param _token1 The higher-address token.
+    /// @param _flowHook The FlowScoreHook to attach.
     constructor(
         IPoolManager _poolManager,
         IPositionManager _positionManager,
@@ -110,6 +195,7 @@ contract FlowScoreSimulator {
         });
 
         if (address(poolManager).code.length > 0) {
+            // solhint-disable-next-line no-empty-blocks
             try _poolManager.initialize(poolKey, SQRT_PRICE_1_1) {} catch {}
         }
 
@@ -117,6 +203,11 @@ contract FlowScoreSimulator {
         _token1.approve(address(_swapRouter), type(uint256).max);
     }
 
+    /// @notice Mints passive liquidity and configures the imbalance scale for the pool.
+    /// @dev Must be called once before any swaps. Sets up a wide-range passive LP position
+    ///      (±750 tick spacings) and attempts to configure the hook's imbalance scale so
+    ///      that MAX_FEE is reached at roughly 8% pool imbalance.
+    /// @param initialLiquidityPerToken Token amount to provide as passive liquidity per side.
     function initializePool(uint256 initialLiquidityPerToken) external {
         if (poolInitialized) revert PoolAlreadyInitialized();
         if (initialLiquidityPerToken == 0) revert ZeroLiquidity();
@@ -135,10 +226,17 @@ contract FlowScoreSimulator {
         passiveTokenId = _mintPosition(poolKey, lower, upper, initialLiquidityPerToken, initialLiquidityPerToken);
         // MAX_FEE at 8 % imbalance of total pool (= 16 % of one side)
         // Owner-only on the hook in production; simulator setup should not fail if deployer keeps ownership.
+        // solhint-disable-next-line no-empty-blocks
         try flowHook.setImbalanceScale(poolKey, initialLiquidityPerToken * 16 / 100) {} catch {}
         poolInitialized = true;
     }
 
+    /// @notice Executes a swap and records diagnostics in lastSwap.
+    /// @dev Mints fresh tokens to cover the swap plus a buffer, then executes the swap
+    ///      through the router. Toxicity is inferred from observed fee-pot movement.
+    /// @param zeroForOne True to swap token0 for token1; false for the reverse direction.
+    /// @param amountIn Exact input amount (in the input token's units).
+    /// @return info A snapshot of swap diagnostics including fee, pot delta, and output amount.
     function executeSwap(bool zeroForOne, uint256 amountIn) external returns (LastSwapInfo memory info) {
         if (!poolInitialized) revert PoolNotInitialized();
         if (amountIn == 0) revert ZeroSwapAmount();
@@ -195,6 +293,13 @@ contract FlowScoreSimulator {
         lastSwap = info;
     }
 
+    /// @notice Returns a snapshot of current pool state and the last swap diagnostics.
+    /// @return reserve0 Total token0 held by the pool manager.
+    /// @return reserve1 Total token1 held by the pool manager.
+    /// @return share0Bps token0's share of total reserves in basis points.
+    /// @return share1Bps token1's share of total reserves in basis points.
+    /// @return feePotBalance Combined token0 and token1 fee pot balance.
+    /// @return info Diagnostics from the most recently executed swap.
     function getPoolSnapshot()
         external
         view
@@ -219,26 +324,13 @@ contract FlowScoreSimulator {
         info = lastSwap;
     }
 
-    function _quoteFeeBps(int256 imbalance, bool zeroForOne, uint256 swapSize, uint256 scale)
-        internal
-        pure
-        returns (uint24)
-    {
-        int256 signedFlow = zeroForOne ? int256(swapSize) : -int256(swapSize);
-        int256 imbalanceAfter = imbalance + signedFlow;
-        uint256 absBefore = imbalance >= 0 ? uint256(imbalance) : uint256(-imbalance);
-        uint256 absAfter = imbalanceAfter >= 0 ? uint256(imbalanceAfter) : uint256(-imbalanceAfter);
-
-        if (absAfter <= absBefore) return MIN_FEE;
-
-        uint256 toxicity = absAfter >= scale ? 100 : (absAfter * 100) / scale;
-        return uint24(BASE_FEE + (toxicity * (MAX_FEE - BASE_FEE)) / 100);
-    }
-
-    function _alignTick(int24 tick) internal pure returns (int24) {
-        return (tick / TICK_SPACING) * TICK_SPACING;
-    }
-
+    /// @notice Mints a position via the position manager and returns the assigned token ID.
+    /// @param key The pool key.
+    /// @param tickLower Lower tick of the range.
+    /// @param tickUpper Upper tick of the range.
+    /// @param amount0Desired Desired token0 deposit.
+    /// @param amount1Desired Desired token1 deposit.
+    /// @return tokenId The ERC-721 token ID assigned to the new position.
     function _mintPosition(
         PoolKey memory key,
         int24 tickLower,
@@ -273,6 +365,10 @@ contract FlowScoreSimulator {
         positionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 60);
     }
 
+    /// @notice Executes an exact-input swap through the router and returns the output amount.
+    /// @param zeroForOne True to swap token0 for token1.
+    /// @param amountIn Input amount.
+    /// @return amountOut Tokens received after the swap.
     function _swap(bool zeroForOne, uint256 amountIn) internal returns (uint256 amountOut) {
         uint256 beforeOut = zeroForOne ? token1.balanceOf(address(this)) : token0.balanceOf(address(this));
         swapRouter.swapExactTokensForTokens({
@@ -286,5 +382,34 @@ contract FlowScoreSimulator {
         });
         uint256 afterOut = zeroForOne ? token1.balanceOf(address(this)) : token0.balanceOf(address(this));
         amountOut = afterOut - beforeOut;
+    }
+
+    /// @notice Estimates the fee in basis points for a prospective swap using only on-chain state.
+    /// @param imbalance Current signed inventory imbalance of the pool.
+    /// @param zeroForOne Swap direction.
+    /// @param swapSize Input amount of the swap.
+    /// @param scale Imbalance scale configured for the pool.
+    /// @return Estimated fee in parts per million.
+    function _quoteFeeBps(int256 imbalance, bool zeroForOne, uint256 swapSize, uint256 scale)
+        internal
+        pure
+        returns (uint24)
+    {
+        int256 signedFlow = zeroForOne ? int256(swapSize) : -int256(swapSize);
+        int256 imbalanceAfter = imbalance + signedFlow;
+        uint256 absBefore = imbalance >= 0 ? uint256(imbalance) : uint256(-imbalance);
+        uint256 absAfter = imbalanceAfter >= 0 ? uint256(imbalanceAfter) : uint256(-imbalanceAfter);
+
+        if (absAfter <= absBefore) return MIN_FEE;
+
+        uint256 toxicity = absAfter >= scale ? 100 : (absAfter * 100) / scale;
+        return uint24(BASE_FEE + (toxicity * (MAX_FEE - BASE_FEE)) / 100);
+    }
+
+    /// @notice Rounds a tick down to the nearest multiple of TICK_SPACING.
+    /// @param tick The raw tick value.
+    /// @return The aligned tick.
+    function _alignTick(int24 tick) internal pure returns (int24) {
+        return (tick / TICK_SPACING) * TICK_SPACING;
     }
 }
