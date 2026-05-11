@@ -31,9 +31,7 @@ contract SimpleVolatilityBaselineHookTest is BaseTest {
         deployArtifactsAndLabel();
         (currency0, currency1) = deployCurrencyPair();
 
-        address flags = address(
-            uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG) ^ (0x8888 << 144)
-        );
+        address flags = address(uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG) ^ (0x8888 << 144));
 
         deployCodeTo("SimpleVolatilityFeeHook.sol:SimpleVolatilityFeeHook", abi.encode(poolManager), flags);
         hook = SimpleVolatilityFeeHook(payable(flags));
@@ -45,7 +43,17 @@ contract SimpleVolatilityBaselineHookTest is BaseTest {
         int24 tickLower = TickMath.minUsableTick(poolKey.tickSpacing);
         int24 tickUpper = TickMath.maxUsableTick(poolKey.tickSpacing);
 
-        positionManager.mint(poolKey, tickLower, tickUpper, 100e18, type(uint256).max, type(uint256).max, address(this), block.timestamp + 1, Constants.ZERO_BYTES);
+        positionManager.mint(
+            poolKey,
+            tickLower,
+            tickUpper,
+            100e18,
+            type(uint256).max,
+            type(uint256).max,
+            address(this),
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
     }
 
     function test_BaselineVolatility_StateUpdatesAfterSwaps() public {
@@ -122,7 +130,17 @@ contract SimpleVolatilityBaselineHookTest is BaseTest {
 
         int24 tickLowerB = TickMath.minUsableTick(keyB.tickSpacing);
         int24 tickUpperB = TickMath.maxUsableTick(keyB.tickSpacing);
-        positionManager.mint(keyB, tickLowerB, tickUpperB, 100e18, type(uint256).max, type(uint256).max, address(this), block.timestamp + 1, Constants.ZERO_BYTES);
+        positionManager.mint(
+            keyB,
+            tickLowerB,
+            tickUpperB,
+            100e18,
+            type(uint256).max,
+            type(uint256).max,
+            address(this),
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
 
         uint24 feeA0 = hook.currentFee(poolId);
         uint24 feeB0 = hook.currentFee(poolIdB);
@@ -144,8 +162,8 @@ contract SimpleVolatilityBaselineHookTest is BaseTest {
 
         uint24 feeA1 = hook.currentFee(poolId);
         uint24 feeB1 = hook.currentFee(poolIdB);
-        (, , uint256 sigmaA,) = hook.volatility(poolId);
-        (, , uint256 sigmaB,) = hook.volatility(poolIdB);
+        (,, uint256 sigmaA,) = hook.volatility(poolId);
+        (,, uint256 sigmaB,) = hook.volatility(poolIdB);
 
         assertGt(feeA1, feeA0, "pool A fee should increase with local volatility");
         assertEq(feeB1, feeB0, "pool B fee must remain unchanged");

@@ -103,7 +103,7 @@ contract SentinelInvariantHandler is Test {
         if (idsA.length == 0) return;
         uint256 tid = idsA[seed % idsA.length];
         bytes32 pk = _pk(alice, tid);
-        (, , , , uint128 storedLiq,,) = hook.positions(poolIdA, pk);
+        (,,,, uint128 storedLiq,,) = hook.positions(poolIdA, pk);
         if (storedLiq == 0) return;
 
         liq = uint128(bound(liq, 1, storedLiq));
@@ -115,7 +115,7 @@ contract SentinelInvariantHandler is Test {
         if (idsB.length == 0) return;
         uint256 tid = idsB[seed % idsB.length];
         bytes32 pk = _pk(bob, tid);
-        (, , , , uint128 storedLiq,,) = hook.positions(poolIdB, pk);
+        (,,,, uint128 storedLiq,,) = hook.positions(poolIdB, pk);
         if (storedLiq == 0) return;
 
         liq = uint128(bound(liq, 1, storedLiq));
@@ -162,8 +162,10 @@ contract SentinelInvariantHandler is Test {
         vm.startPrank(user);
         MockERC20(Currency.unwrap(currency0)).approve(permit2, type(uint256).max);
         MockERC20(Currency.unwrap(currency1)).approve(permit2, type(uint256).max);
-        IPermit2(permit2).approve(Currency.unwrap(currency0), address(positionManager), type(uint160).max, type(uint48).max);
-        IPermit2(permit2).approve(Currency.unwrap(currency1), address(positionManager), type(uint160).max, type(uint48).max);
+        IPermit2(permit2)
+            .approve(Currency.unwrap(currency0), address(positionManager), type(uint160).max, type(uint48).max);
+        IPermit2(permit2)
+            .approve(Currency.unwrap(currency1), address(positionManager), type(uint160).max, type(uint48).max);
         vm.stopPrank();
     }
 }
@@ -204,10 +206,32 @@ contract SentinelJITGuardHookInvariantTest is StdInvariant, BaseTest {
         int24 tickLower = TickMath.minUsableTick(poolKeyA.tickSpacing);
         int24 tickUpper = TickMath.maxUsableTick(poolKeyA.tickSpacing);
 
-        positionManager.mint(poolKeyA, tickLower, tickUpper, 200e18, type(uint256).max, type(uint256).max, address(this), block.timestamp + 1, Constants.ZERO_BYTES);
-        positionManager.mint(poolKeyB, tickLower, tickUpper, 200e18, type(uint256).max, type(uint256).max, address(this), block.timestamp + 1, Constants.ZERO_BYTES);
+        positionManager.mint(
+            poolKeyA,
+            tickLower,
+            tickUpper,
+            200e18,
+            type(uint256).max,
+            type(uint256).max,
+            address(this),
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
+        positionManager.mint(
+            poolKeyB,
+            tickLower,
+            tickUpper,
+            200e18,
+            type(uint256).max,
+            type(uint256).max,
+            address(this),
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
 
-        handler = new SentinelInvariantHandler(hook, positionManager, currency0, currency1, poolKeyA, poolKeyB, address(permit2));
+        handler = new SentinelInvariantHandler(
+            hook, positionManager, currency0, currency1, poolKeyA, poolKeyB, address(permit2)
+        );
         targetContract(address(handler));
     }
 
@@ -216,7 +240,7 @@ contract SentinelJITGuardHookInvariantTest is StdInvariant, BaseTest {
         for (uint256 i = 0; i < lenA; i++) {
             uint256 tid = handler.idAAt(i);
             bytes32 pk = handler.positionKeyA(tid);
-            (uint48 addedAtBlock, , , , uint128 liquidity, uint128 cumulativeAdded, uint128 cumulativeRemoved) =
+            (uint48 addedAtBlock,,,, uint128 liquidity, uint128 cumulativeAdded, uint128 cumulativeRemoved) =
                 hook.positions(poolIdA, pk);
 
             assertLe(cumulativeRemoved, cumulativeAdded, "removed cannot exceed added");
@@ -231,7 +255,7 @@ contract SentinelJITGuardHookInvariantTest is StdInvariant, BaseTest {
         for (uint256 i = 0; i < lenB; i++) {
             uint256 tid = handler.idBAt(i);
             bytes32 pk = handler.positionKeyB(tid);
-            (uint48 addedAtBlock, , , , uint128 liquidity, uint128 cumulativeAdded, uint128 cumulativeRemoved) =
+            (uint48 addedAtBlock,,,, uint128 liquidity, uint128 cumulativeAdded, uint128 cumulativeRemoved) =
                 hook.positions(poolIdB, pk);
 
             assertLe(cumulativeRemoved, cumulativeAdded, "removed cannot exceed added");
@@ -247,14 +271,14 @@ contract SentinelJITGuardHookInvariantTest is StdInvariant, BaseTest {
         uint256 lenA = handler.idsALength();
         for (uint256 i = 0; i < lenA; i++) {
             bytes32 pk = handler.positionKeyA(handler.idAAt(i));
-            (uint48 inB, , , , , ,) = hook.positions(poolIdB, pk);
+            (uint48 inB,,,,,,) = hook.positions(poolIdB, pk);
             assertEq(inB, 0, "pool A key must not exist in pool B");
         }
 
         uint256 lenB = handler.idsBLength();
         for (uint256 i = 0; i < lenB; i++) {
             bytes32 pk = handler.positionKeyB(handler.idBAt(i));
-            (uint48 inA, , , , , ,) = hook.positions(poolIdA, pk);
+            (uint48 inA,,,,,,) = hook.positions(poolIdA, pk);
             assertEq(inA, 0, "pool B key must not exist in pool A");
         }
     }

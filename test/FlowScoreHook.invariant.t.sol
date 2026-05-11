@@ -121,8 +121,10 @@ contract FlowScoreInvariantHandler is Test {
         MockERC20(Currency.unwrap(currency1)).approve(permit2, type(uint256).max);
         MockERC20(Currency.unwrap(currency0)).approve(address(swapRouter), type(uint256).max);
         MockERC20(Currency.unwrap(currency1)).approve(address(swapRouter), type(uint256).max);
-        IPermit2(permit2).approve(Currency.unwrap(currency0), address(positionManager), type(uint160).max, type(uint48).max);
-        IPermit2(permit2).approve(Currency.unwrap(currency1), address(positionManager), type(uint160).max, type(uint48).max);
+        IPermit2(permit2)
+            .approve(Currency.unwrap(currency0), address(positionManager), type(uint160).max, type(uint48).max);
+        IPermit2(permit2)
+            .approve(Currency.unwrap(currency1), address(positionManager), type(uint160).max, type(uint48).max);
         IPermit2(permit2).approve(Currency.unwrap(currency0), address(swapRouter), type(uint160).max, type(uint48).max);
         IPermit2(permit2).approve(Currency.unwrap(currency1), address(swapRouter), type(uint160).max, type(uint48).max);
         vm.stopPrank();
@@ -132,13 +134,7 @@ contract FlowScoreInvariantHandler is Test {
         attempts++;
         vm.prank(user);
         try swapRouter.swapExactTokensForTokens(
-            amountIn,
-            0,
-            zeroForOne,
-            poolKey,
-            Constants.ZERO_BYTES,
-            user,
-            block.timestamp + 1
+            amountIn, 0, zeroForOne, poolKey, Constants.ZERO_BYTES, user, block.timestamp + 1
         ) {
             successes++;
             return true;
@@ -197,9 +193,21 @@ contract FlowScoreHookInvariantTest is StdInvariant, BaseTest {
 
         int24 tickLower = TickMath.minUsableTick(poolKey.tickSpacing);
         int24 tickUpper = TickMath.maxUsableTick(poolKey.tickSpacing);
-        positionManager.mint(poolKey, tickLower, tickUpper, 200e18, type(uint256).max, type(uint256).max, address(this), block.timestamp + 1, Constants.ZERO_BYTES);
+        positionManager.mint(
+            poolKey,
+            tickLower,
+            tickUpper,
+            200e18,
+            type(uint256).max,
+            type(uint256).max,
+            address(this),
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
 
-        handler = new FlowScoreInvariantHandler(hook, poolKey, currency0, currency1, swapRouter, positionManager, address(permit2));
+        handler = new FlowScoreInvariantHandler(
+            hook, poolKey, currency0, currency1, swapRouter, positionManager, address(permit2)
+        );
         targetContract(address(handler));
 
         handler.seedPot0(2e16);
@@ -209,7 +217,9 @@ contract FlowScoreHookInvariantTest is StdInvariant, BaseTest {
     function invariant_FlowScore_FeePotsNeverUnderflow_AndCapRespected() public view {
         (,,, uint256 feePot0, uint256 feePot1,,, uint48 bonusBlock, uint256 blockBonusPaid) = hook.flowState(poolId);
         assertLe(feePot0 + feePot1, 1_000_000e18, "fee pots must stay bounded");
-        if (bonusBlock == uint48(block.number)) assertLe(blockBonusPaid, feePot0 + feePot1, "bonus paid bounded by total pot");
+        if (bonusBlock == uint48(block.number)) {
+            assertLe(blockBonusPaid, feePot0 + feePot1, "bonus paid bounded by total pot");
+        }
         assertFalse(handler.blockCapViolation(), "handler observed per-block cap violation");
         assertFalse(handler.reserveViolation(), "handler observed reserve violation");
         assertGt(handler.successes(), 0, "handler must execute successful swaps");

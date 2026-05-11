@@ -135,11 +135,7 @@ contract FlowScoreHook is BaseHook {
     // ─────────────────────────────────────────────
 
     /// @notice initialises per-pool flow state using the initial tick (not sqrtPrice).
-    function _afterInitialize(address, PoolKey calldata key, uint160, int24 tick)
-        internal
-        override
-        returns (bytes4)
-    {
+    function _afterInitialize(address, PoolKey calldata key, uint160, int24 tick) internal override returns (bytes4) {
         PoolId pid = key.toId();
         flowState[pid] = PoolFlowState({
             emaTick: tick,
@@ -209,11 +205,13 @@ contract FlowScoreHook is BaseHook {
     }
 
     /// @notice Updates flow state, handles deferred toxic contributions, and pays cashback to benign swappers.
-    function _afterSwap(address sender, PoolKey calldata key, SwapParams calldata params, BalanceDelta delta, bytes calldata)
-        internal
-        override
-        returns (bytes4, int128)
-    {
+    function _afterSwap(
+        address sender,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        bytes calldata
+    ) internal override returns (bytes4, int128) {
         PoolId pid = key.toId();
         PoolFlowState storage state = flowState[pid];
         int256 imbalanceBefore = state.inventoryImbalance;
@@ -229,8 +227,9 @@ contract FlowScoreHook is BaseHook {
         uint256 swapSizeAbs =
             params.amountSpecified < 0 ? uint256(-params.amountSpecified) : uint256(params.amountSpecified);
         int256 signedFlow = params.zeroForOne ? int256(swapSizeAbs) : -int256(swapSizeAbs);
-        state.signedFlowEma = (int256(EMA_ALPHA) * signedFlow + int256(EMA_DENOMINATOR - EMA_ALPHA) * state.signedFlowEma)
-            / int256(EMA_DENOMINATOR);
+        state.signedFlowEma =
+            (int256(EMA_ALPHA) * signedFlow + int256(EMA_DENOMINATOR - EMA_ALPHA) * state.signedFlowEma)
+                / int256(EMA_DENOMINATOR);
 
         // Update inventory imbalance based on actual delta.
         int128 amount0 = delta.amount0();
@@ -359,22 +358,20 @@ contract FlowScoreHook is BaseHook {
         // Direction-based toxicity: does the swap worsen pool imbalance?
         int256 signedFlow = params.zeroForOne ? int256(swapSize) : -int256(swapSize);
         int256 imbalanceAfter = state.inventoryImbalance + signedFlow;
-        bool signChanged = (state.inventoryImbalance != 0)
-            && ((state.inventoryImbalance > 0) != (imbalanceAfter > 0));
+        bool signChanged = (state.inventoryImbalance != 0) && ((state.inventoryImbalance > 0) != (imbalanceAfter > 0));
         isToxic = _abs(imbalanceAfter) > _abs(state.inventoryImbalance) || signChanged;
 
         // Size score: how large is the swap relative to SIZE_SCALE (1e18 reference).
         uint256 sizeScoreBps = swapSize >= SIZE_SCALE ? BPS_DENOMINATOR : (swapSize * BPS_DENOMINATOR / SIZE_SCALE);
 
         // Flow score: how aligned is this swap with the recent signed-flow EMA?
-        bool flowDirectionMatch = (state.signedFlowEma > 0 && signedFlow > 0)
-            || (state.signedFlowEma < 0 && signedFlow < 0);
+        bool flowDirectionMatch =
+            (state.signedFlowEma > 0 && signedFlow > 0) || (state.signedFlowEma < 0 && signedFlow < 0);
         uint256 flowScoreBps;
         if (state.signedFlowEma == 0 || !flowDirectionMatch) {
             flowScoreBps = 0;
         } else {
-            uint256 absEma =
-                state.signedFlowEma > 0 ? uint256(state.signedFlowEma) : uint256(-state.signedFlowEma);
+            uint256 absEma = state.signedFlowEma > 0 ? uint256(state.signedFlowEma) : uint256(-state.signedFlowEma);
             flowScoreBps = absEma >= SIZE_SCALE ? BPS_DENOMINATOR : (absEma * BPS_DENOMINATOR / SIZE_SCALE);
         }
 
@@ -387,10 +384,9 @@ contract FlowScoreHook is BaseHook {
             : (absDeviation * BPS_DENOMINATOR / DEVIATION_SCALE_TICKS);
 
         // Weighted composite → normalise to 0-100.
-        uint256 compositeBps = (
-            sizeScoreBps * WEIGHT_SIZE_BPS + flowScoreBps * WEIGHT_FLOW_BPS
-                + deviationScoreBps * WEIGHT_DEVIATION_BPS
-        ) / BPS_DENOMINATOR;
+        uint256 compositeBps =
+            (sizeScoreBps * WEIGHT_SIZE_BPS + flowScoreBps * WEIGHT_FLOW_BPS + deviationScoreBps * WEIGHT_DEVIATION_BPS)
+                / BPS_DENOMINATOR;
         toxicityRatio = compositeBps / 100;
     }
 

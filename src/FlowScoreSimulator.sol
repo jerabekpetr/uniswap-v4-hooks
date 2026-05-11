@@ -147,8 +147,14 @@ contract FlowScoreSimulator {
         token1.mint(address(this), amountIn + 1e18);
 
         PoolId pid = poolKey.toId();
-        (, int256 signedFlowEmaBefore, int256 imbalance, uint256 feePot0Before, uint256 feePot1Before,, uint256 imbalanceScale,,) =
-            flowHook.flowState(pid);
+        (
+            ,
+            int256 signedFlowEmaBefore,
+            int256 imbalance,
+            uint256 feePot0Before,
+            uint256 feePot1Before,,
+            uint256 imbalanceScale,,
+        ) = flowHook.flowState(pid);
 
         uint24 feeBps = _quoteFeeBps(imbalance, zeroForOne, amountIn, imbalanceScale);
         bool toxic = feeBps > BASE_FEE;
@@ -156,7 +162,7 @@ contract FlowScoreSimulator {
 
         uint256 amountOut = _swap(zeroForOne, amountIn);
         (, int256 signedFlowEmaAfter,,,,,,,) = flowHook.flowState(pid);
-        (, , , uint256 feePot0After, uint256 feePot1After,,,,) = flowHook.flowState(pid);
+        (,,, uint256 feePot0After, uint256 feePot1After,,,,) = flowHook.flowState(pid);
 
         uint256 totalBefore = feePot0Before + feePot1Before;
         uint256 totalAfter = feePot0After + feePot1After;
@@ -208,7 +214,7 @@ contract FlowScoreSimulator {
             share0Bps = (reserve0 * BPS_DENOMINATOR) / total;
             share1Bps = BPS_DENOMINATOR - share0Bps;
         }
-        (, , , uint256 feePot0, uint256 feePot1,,, ,) = flowHook.flowState(poolKey.toId());
+        (,,, uint256 feePot0, uint256 feePot1,,,,) = flowHook.flowState(poolKey.toId());
         feePotBalance = feePot0 + feePot1;
         info = lastSwap;
     }

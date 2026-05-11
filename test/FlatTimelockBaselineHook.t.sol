@@ -50,7 +50,17 @@ contract FlatTimelockBaselineHookTest is BaseTest {
         tickLower = TickMath.minUsableTick(poolKey.tickSpacing);
         tickUpper = TickMath.maxUsableTick(poolKey.tickSpacing);
 
-        positionManager.mint(poolKey, tickLower, tickUpper, 100e18, type(uint256).max, type(uint256).max, address(this), block.timestamp + 1, Constants.ZERO_BYTES);
+        positionManager.mint(
+            poolKey,
+            tickLower,
+            tickUpper,
+            100e18,
+            type(uint256).max,
+            type(uint256).max,
+            address(this),
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
     }
 
     function test_BaselineTimelock_RemoveBeforeTimelock_AppliesFlatPenalty() public {
@@ -59,7 +69,17 @@ contract FlatTimelockBaselineHookTest is BaseTest {
 
         vm.startPrank(lp);
         uint256 b0 = currency0.balanceOf(lp);
-        (uint256 tid,) = positionManager.mint(poolKey, -120, 120, 10e18, type(uint256).max, type(uint256).max, lp, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tid,) = positionManager.mint(
+            poolKey,
+            -120,
+            120,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            lp,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
         uint256 deposited = b0 - currency0.balanceOf(lp);
 
         uint256 b0r = currency0.balanceOf(lp);
@@ -76,7 +96,17 @@ contract FlatTimelockBaselineHookTest is BaseTest {
 
         vm.startPrank(lp);
         uint256 b0 = currency0.balanceOf(lp);
-        (uint256 tid,) = positionManager.mint(poolKey, -120, 120, 10e18, type(uint256).max, type(uint256).max, lp, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tid,) = positionManager.mint(
+            poolKey,
+            -120,
+            120,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            lp,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
         uint256 deposited = b0 - currency0.balanceOf(lp);
 
         vm.roll(block.number + hook.TIMELOCK_BLOCKS());
@@ -94,7 +124,17 @@ contract FlatTimelockBaselineHookTest is BaseTest {
         _fundAndApprove(lp, 1000e18);
 
         vm.startPrank(lp);
-        (uint256 tid,) = positionManager.mint(poolKey, -120, 120, 20e18, type(uint256).max, type(uint256).max, lp, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tid,) = positionManager.mint(
+            poolKey,
+            -120,
+            120,
+            20e18,
+            type(uint256).max,
+            type(uint256).max,
+            lp,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
         bytes32 pk = keccak256(abi.encodePacked(address(positionManager), int24(-120), int24(120), bytes32(tid)));
 
         positionManager.decreaseLiquidity(tid, 10e18, 0, 0, lp, block.timestamp + 1, Constants.ZERO_BYTES);
@@ -120,15 +160,37 @@ contract FlatTimelockBaselineHookTest is BaseTest {
         PoolId poolIdB = keyB.toId();
         poolManager.initialize(keyB, Constants.SQRT_PRICE_1_1);
         vm.startPrank(lpB);
-        positionManager.mint(keyB, tickLower, tickUpper, 100e18, type(uint256).max, type(uint256).max, lpB, block.timestamp + 1, Constants.ZERO_BYTES);
+        positionManager.mint(
+            keyB,
+            tickLower,
+            tickUpper,
+            100e18,
+            type(uint256).max,
+            type(uint256).max,
+            lpB,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
         vm.stopPrank();
 
         vm.startPrank(lpA);
-        (uint256 tidA,) = positionManager.mint(poolKey, -120, 120, 10e18, type(uint256).max, type(uint256).max, lpA, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tidA,) = positionManager.mint(
+            poolKey,
+            -120,
+            120,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            lpA,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
         vm.stopPrank();
 
         vm.startPrank(lpB);
-        (uint256 tidB,) = positionManager.mint(keyB, -120, 120, 10e18, type(uint256).max, type(uint256).max, lpB, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tidB,) = positionManager.mint(
+            keyB, -120, 120, 10e18, type(uint256).max, type(uint256).max, lpB, block.timestamp + 1, Constants.ZERO_BYTES
+        );
         vm.stopPrank();
 
         bytes32 pkA = keccak256(abi.encodePacked(address(positionManager), int24(-120), int24(120), bytes32(tidA)));

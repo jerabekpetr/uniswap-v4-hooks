@@ -73,7 +73,9 @@ contract GasBenchmark is BaseTest {
                     | Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG
             ) ^ (0x7777 << 144)
         );
-        deployCodeTo("FlatTimelockWithdrawalFeeHook.sol:FlatTimelockWithdrawalFeeHook", abi.encode(poolManager), flatFlags);
+        deployCodeTo(
+            "FlatTimelockWithdrawalFeeHook.sol:FlatTimelockWithdrawalFeeHook", abi.encode(poolManager), flatFlags
+        );
         flatTimelock = FlatTimelockWithdrawalFeeHook(flatFlags);
         flatTimelockKey = PoolKey(currency0, currency1, 3000, 60, IHooks(flatTimelock));
         poolManager.initialize(flatTimelockKey, Constants.SQRT_PRICE_1_1);
@@ -91,9 +93,7 @@ contract GasBenchmark is BaseTest {
         poolManager.initialize(flowScoreKey, Constants.SQRT_PRICE_1_1);
 
         // --- Simple volatility baseline pool ---
-        address simpleVolFlags = address(
-            uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG) ^ (0x8888 << 144)
-        );
+        address simpleVolFlags = address(uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG) ^ (0x8888 << 144));
         deployCodeTo("SimpleVolatilityFeeHook.sol:SimpleVolatilityFeeHook", abi.encode(poolManager), simpleVolFlags);
         simpleVol = SimpleVolatilityFeeHook(payable(simpleVolFlags));
         simpleVolKey = PoolKey(currency0, currency1, LPFeeLibrary.DYNAMIC_FEE_FLAG, 60, IHooks(simpleVol));

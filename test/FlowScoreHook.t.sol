@@ -78,8 +78,14 @@ contract FlowScoreHookTest is BaseTest {
 
     /// @dev Initial hook state after pool init: emaTick = 0, imbalance = 0, both feePots = 0.
     function test_InitialState() public view {
-        (int24 emaTick, int256 signedFlowEma, int256 inventoryImbalance, uint256 feePot0, uint256 feePot1, uint256 lastUpdated,,,) =
-            hook.flowState(poolId);
+        (
+            int24 emaTick,
+            int256 signedFlowEma,
+            int256 inventoryImbalance,
+            uint256 feePot0,
+            uint256 feePot1,
+            uint256 lastUpdated,,,
+        ) = hook.flowState(poolId);
 
         assertEq(emaTick, 0); // tick at sqrt_price_1_1 is 0
         assertEq(signedFlowEma, 0);
@@ -254,9 +260,13 @@ contract FlowScoreHookTest is BaseTest {
         _fundAndApprove(address(this), 10_000e18);
 
         swapRouter.swapExactTokensForTokens({
-            amountIn: 10e18, amountOutMin: 0, zeroForOne: true,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: address(this), deadline: block.timestamp + 1
+            amountIn: 10e18,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
         });
 
         (,,, uint256 fp0,,,,,) = hook.flowState(poolId);
@@ -271,9 +281,13 @@ contract FlowScoreHookTest is BaseTest {
         _fundAndApprove(address(this), 10_000e18);
 
         swapRouter.swapExactTokensForTokens({
-            amountIn: 10e18, amountOutMin: 0, zeroForOne: true,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: address(this), deadline: block.timestamp + 1
+            amountIn: 10e18,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
         });
 
         (,,, uint256 fp0Before,,,,,) = hook.flowState(poolId);
@@ -283,9 +297,12 @@ contract FlowScoreHookTest is BaseTest {
 
         swapRouter.swapExactTokensForTokens({
             amountIn: hook.MIN_CASHBACK_TRADE_SIZE() - 1,
-            amountOutMin: 0, zeroForOne: false,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: address(this), deadline: block.timestamp + 1
+            amountOutMin: 0,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
         });
 
         (,,, uint256 fp0After,,,,,) = hook.flowState(poolId);
@@ -417,9 +434,13 @@ contract FlowScoreHookTest is BaseTest {
         _fundAndApprove(address(this), 10_000e18);
 
         swapRouter.swapExactTokensForTokens({
-            amountIn: 10e18, amountOutMin: 0, zeroForOne: true,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: address(this), deadline: block.timestamp + 1
+            amountIn: 10e18,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
         });
 
         vm.roll(block.number + 1);
@@ -427,18 +448,26 @@ contract FlowScoreHookTest is BaseTest {
         (,,, uint256 fp0Start,,,,,) = hook.flowState(poolId);
 
         swapRouter.swapExactTokensForTokens({
-            amountIn: 1e18, amountOutMin: 0, zeroForOne: false,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: address(this), deadline: block.timestamp + 1
+            amountIn: 1e18,
+            amountOutMin: 0,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
         });
 
         (,,, uint256 fp0Mid,,,,,) = hook.flowState(poolId);
         assertLt(fp0Mid, fp0Start, "first benign swap should draw cashback");
 
         swapRouter.swapExactTokensForTokens({
-            amountIn: 1e18, amountOutMin: 0, zeroForOne: false,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: address(this), deadline: block.timestamp + 1
+            amountIn: 1e18,
+            amountOutMin: 0,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
         });
 
         (,,, uint256 fp0End,,,,,) = hook.flowState(poolId);
@@ -453,9 +482,13 @@ contract FlowScoreHookTest is BaseTest {
         uint256 bal1Before = currency1.balanceOfSelf();
 
         swapRouter.swapExactTokensForTokens({
-            amountIn: 5e18, amountOutMin: 0, zeroForOne: true,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: address(this), deadline: block.timestamp + 1
+            amountIn: 5e18,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
         });
 
         uint256 bal0Mid = currency0.balanceOfSelf();
@@ -464,9 +497,13 @@ contract FlowScoreHookTest is BaseTest {
         assertGt(bal1Mid, bal1Before, "token1 must increase");
 
         swapRouter.swapExactTokensForTokens({
-            amountIn: 5e18, amountOutMin: 0, zeroForOne: false,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: address(this), deadline: block.timestamp + 1
+            amountIn: 5e18,
+            amountOutMin: 0,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
         });
 
         uint256 bal0Final = currency0.balanceOfSelf();
@@ -482,9 +519,13 @@ contract FlowScoreHookTest is BaseTest {
 
         // zeroForOne exact output (token0 input) should increase feePot0 only.
         swapRouter.swapTokensForExactTokens({
-            amountOut: 2e18, amountInMax: 20e18, zeroForOne: true,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: address(this), deadline: block.timestamp + 1
+            amountOut: 2e18,
+            amountInMax: 20e18,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
         });
         (,,, uint256 fp0a, uint256 fp1a,,,,) = hook.flowState(poolId);
         assertGt(fp0a, 0, "exact output zeroForOne toxic swap must add to feePot0");
@@ -493,9 +534,13 @@ contract FlowScoreHookTest is BaseTest {
         // benign reverse exact output (token0 output) draws cashback only from feePot0.
         vm.roll(block.number + 1);
         swapRouter.swapTokensForExactTokens({
-            amountOut: 1e18, amountInMax: 20e18, zeroForOne: false,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: address(this), deadline: block.timestamp + 1
+            amountOut: 1e18,
+            amountInMax: 20e18,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
         });
         (,,, uint256 fp0b, uint256 fp1b,,,, uint256 paidAfterBenign0) = hook.flowState(poolId);
         // Cashback can be zero if policy guards or rounding block payout. In all cases, no cross-token leakage.
@@ -508,9 +553,13 @@ contract FlowScoreHookTest is BaseTest {
         // oneForZero exact output (token1 input) should increase feePot1 only.
         vm.roll(block.number + 1);
         swapRouter.swapTokensForExactTokens({
-            amountOut: 2e18, amountInMax: 20e18, zeroForOne: false,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: address(this), deadline: block.timestamp + 1
+            amountOut: 2e18,
+            amountInMax: 20e18,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
         });
         (,,, uint256 fp0c, uint256 fp1c,,,,) = hook.flowState(poolId);
         assertEq(fp0c, fp0b, "token1-input exact output must not increase feePot0");
@@ -520,9 +569,13 @@ contract FlowScoreHookTest is BaseTest {
         vm.roll(block.number + 1);
         (,,,,,,,, uint256 paidBeforeFinalLeg) = hook.flowState(poolId);
         swapRouter.swapTokensForExactTokens({
-            amountOut: 1e18, amountInMax: 20e18, zeroForOne: true,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: address(this), deadline: block.timestamp + 1
+            amountOut: 1e18,
+            amountInMax: 20e18,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
         });
         (,,, uint256 fp0d, uint256 fp1d,,,, uint256 paidAfterBenign1) = hook.flowState(poolId);
         if (paidAfterBenign1 > paidBeforeFinalLeg) {
@@ -558,9 +611,13 @@ contract FlowScoreHookTest is BaseTest {
 
         vm.startPrank(a);
         swapRouter.swapExactTokensForTokens({
-            amountIn: 25e18, amountOutMin: 0, zeroForOne: true,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: a, deadline: block.timestamp + 1
+            amountIn: 25e18,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: a,
+            deadline: block.timestamp + 1
         });
         vm.stopPrank();
 
@@ -571,17 +628,25 @@ contract FlowScoreHookTest is BaseTest {
 
         vm.startPrank(a);
         swapRouter.swapExactTokensForTokens({
-            amountIn: 8e18, amountOutMin: 0, zeroForOne: false,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: a, deadline: block.timestamp + 1
+            amountIn: 8e18,
+            amountOutMin: 0,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: a,
+            deadline: block.timestamp + 1
         });
         (,,, uint256 potAfterFirst,,,,, uint256 paidAfterFirst) = hook.flowState(poolId);
         assertLe(potAfterFirst, potStart, "first benign swap must not increase pot");
 
         swapRouter.swapExactTokensForTokens({
-            amountIn: 8e18, amountOutMin: 0, zeroForOne: false,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: a, deadline: block.timestamp + 1
+            amountIn: 8e18,
+            amountOutMin: 0,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: a,
+            deadline: block.timestamp + 1
         });
         (,,, uint256 potAfterSecond,,,,, uint256 paidAfterSecond) = hook.flowState(poolId);
         vm.stopPrank();
@@ -590,17 +655,25 @@ contract FlowScoreHookTest is BaseTest {
 
         vm.prank(b);
         swapRouter.swapExactTokensForTokens({
-            amountIn: 8e18, amountOutMin: 0, zeroForOne: false,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: b, deadline: block.timestamp + 1
+            amountIn: 8e18,
+            amountOutMin: 0,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: b,
+            deadline: block.timestamp + 1
         });
         (,,,,,,,, uint256 paidAfterThird) = hook.flowState(poolId);
 
         vm.prank(c);
         swapRouter.swapExactTokensForTokens({
-            amountIn: 8e18, amountOutMin: 0, zeroForOne: false,
-            poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-            receiver: c, deadline: block.timestamp + 1
+            amountIn: 8e18,
+            amountOutMin: 0,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: c,
+            deadline: block.timestamp + 1
         });
         (,,, uint256 potEndSameBlock,,,,, uint256 paidEndSameBlock) = hook.flowState(poolId);
 

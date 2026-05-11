@@ -30,14 +30,8 @@ contract DeployHookScript is Script {
 
         require(address(hook) == hookAddress, "DeployHookScript: Hook Address Mismatch");
 
-        string memory json = string.concat(
-            "{\n",
-            '  "chainId": 31337,\n',
-            '  "hook": "',
-            vm.toString(address(hook)),
-            '"\n',
-            "}\n"
-        );
+        string memory json =
+            string.concat("{\n", '  "chainId": 31337,\n', '  "hook": "', vm.toString(address(hook)), '"\n', "}\n");
         vm.writeFile("./frontend/hook-sentinel.json", json);
     }
 }

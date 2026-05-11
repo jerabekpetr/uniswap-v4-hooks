@@ -155,7 +155,7 @@ contract SentinelJITGuardHook is BaseHook {
         BalanceDelta,
         bytes calldata hookData
     ) internal override returns (bytes4, BalanceDelta) {
-        address owner = _effectiveOwner(sender, hookData); 
+        address owner = _effectiveOwner(sender, hookData);
         bytes32 posKey = _positionKey(owner, params.tickLower, params.tickUpper, params.salt);
 
         PoolId pid = key.toId();
@@ -173,8 +173,8 @@ contract SentinelJITGuardHook is BaseHook {
         } else {
             // Fresh slot: initialise all fields.
             p.addedAtBlock = uint48(block.number);
-            p.tickLower = params.tickLower; 
-            p.tickUpper = params.tickUpper; 
+            p.tickLower = params.tickLower;
+            p.tickUpper = params.tickUpper;
             p.entryTick = currentTick;
             p.liquidity = addedLiq;
             p.cumulativeAdded = addedLiq;
@@ -196,7 +196,7 @@ contract SentinelJITGuardHook is BaseHook {
         BalanceDelta feesAccrued,
         bytes calldata hookData
     ) internal override returns (bytes4, BalanceDelta) {
-        address owner = _effectiveOwner(sender, hookData); 
+        address owner = _effectiveOwner(sender, hookData);
         bytes32 posKey = _positionKey(owner, params.tickLower, params.tickUpper, params.salt);
 
         PoolId pid = key.toId();
@@ -269,12 +269,8 @@ contract SentinelJITGuardHook is BaseHook {
         int128 principal0 = delta.amount0() - fees0;
         int128 principal1 = delta.amount1() - fees1;
 
-        int128 penalty0 = principal0 > 0
-            ? int128(int256(uint256(uint128(principal0)) * penaltyBps / BPS))
-            : int128(0);
-        int128 penalty1 = principal1 > 0
-            ? int128(int256(uint256(uint128(principal1)) * penaltyBps / BPS))
-            : int128(0);
+        int128 penalty0 = principal0 > 0 ? int128(int256(uint256(uint128(principal0)) * penaltyBps / BPS)) : int128(0);
+        int128 penalty1 = principal1 > 0 ? int128(int256(uint256(uint128(principal1)) * penaltyBps / BPS)) : int128(0);
 
         // 100% of accrued fees are also penalised.
         if (fees0 > 0) penalty0 += fees0;

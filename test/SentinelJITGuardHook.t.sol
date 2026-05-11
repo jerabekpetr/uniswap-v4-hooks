@@ -108,7 +108,17 @@ contract SentinelJITGuardHookTest is BaseTest {
 
         vm.startPrank(lp);
         uint256 balBefore = currency0.balanceOf(lp);
-        (uint256 tid,) = positionManager.mint(poolKey, -120, 120, 10e18, type(uint256).max, type(uint256).max, lp, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tid,) = positionManager.mint(
+            poolKey,
+            -120,
+            120,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            lp,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
         uint256 dep = balBefore - currency0.balanceOf(lp);
 
         vm.roll(block.number + hook.GRACE_BLOCKS());
@@ -189,13 +199,26 @@ contract SentinelJITGuardHookTest is BaseTest {
 
     /// @dev Penalty at age 0 is greater than penalty at age 10 for identical narrow in-range positions.
     function test_Sentinel_Penalty_DecreasesWithAge() public {
-        int24 nL = -120; int24 nU = 120;
-        address atk1 = makeAddr("age0"); address atk2 = makeAddr("age10");
-        _fundAndApprove(atk1, 1000e18); _fundAndApprove(atk2, 1000e18);
+        int24 nL = -120;
+        int24 nU = 120;
+        address atk1 = makeAddr("age0");
+        address atk2 = makeAddr("age10");
+        _fundAndApprove(atk1, 1000e18);
+        _fundAndApprove(atk2, 1000e18);
 
         vm.startPrank(atk1);
         uint256 b1 = currency0.balanceOf(atk1);
-        (uint256 tid1,) = positionManager.mint(poolKey, nL, nU, 10e18, type(uint256).max, type(uint256).max, atk1, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tid1,) = positionManager.mint(
+            poolKey,
+            nL,
+            nU,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            atk1,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
         uint256 dep1 = b1 - currency0.balanceOf(atk1);
         uint256 b1r = currency0.balanceOf(atk1);
         positionManager.decreaseLiquidity(tid1, 10e18, 0, 0, atk1, block.timestamp + 1, Constants.ZERO_BYTES);
@@ -204,7 +227,17 @@ contract SentinelJITGuardHookTest is BaseTest {
 
         vm.startPrank(atk2);
         uint256 b2 = currency0.balanceOf(atk2);
-        (uint256 tid2,) = positionManager.mint(poolKey, nL, nU, 10e18, type(uint256).max, type(uint256).max, atk2, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tid2,) = positionManager.mint(
+            poolKey,
+            nL,
+            nU,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            atk2,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
         uint256 dep2 = b2 - currency0.balanceOf(atk2);
         vm.roll(block.number + 10);
         uint256 b2r = currency0.balanceOf(atk2);
@@ -217,12 +250,24 @@ contract SentinelJITGuardHookTest is BaseTest {
 
     /// @dev Narrow in-range position incurs a higher penalty rate than a wide in-range position.
     function test_Sentinel_NarrowRangePenaltyGreaterThanWideRange() public {
-        address atkN = makeAddr("narrow"); address atkW = makeAddr("wide");
-        _fundAndApprove(atkN, 1000e18); _fundAndApprove(atkW, 1000e18);
+        address atkN = makeAddr("narrow");
+        address atkW = makeAddr("wide");
+        _fundAndApprove(atkN, 1000e18);
+        _fundAndApprove(atkW, 1000e18);
 
         vm.startPrank(atkN);
         uint256 bN = currency0.balanceOf(atkN);
-        (uint256 tidN,) = positionManager.mint(poolKey, -120, 120, 10e18, type(uint256).max, type(uint256).max, atkN, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tidN,) = positionManager.mint(
+            poolKey,
+            -120,
+            120,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            atkN,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
         uint256 depN = bN - currency0.balanceOf(atkN);
         uint256 bNr = currency0.balanceOf(atkN);
         positionManager.decreaseLiquidity(tidN, 10e18, 0, 0, atkN, block.timestamp + 1, Constants.ZERO_BYTES);
@@ -231,7 +276,17 @@ contract SentinelJITGuardHookTest is BaseTest {
 
         vm.startPrank(atkW);
         uint256 bW = currency0.balanceOf(atkW);
-        (uint256 tidW,) = positionManager.mint(poolKey, -600, 600, 10e18, type(uint256).max, type(uint256).max, atkW, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tidW,) = positionManager.mint(
+            poolKey,
+            -600,
+            600,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            atkW,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
         uint256 depW = bW - currency0.balanceOf(atkW);
         uint256 bWr = currency0.balanceOf(atkW);
         positionManager.decreaseLiquidity(tidW, 10e18, 0, 0, atkW, block.timestamp + 1, Constants.ZERO_BYTES);
@@ -243,13 +298,25 @@ contract SentinelJITGuardHookTest is BaseTest {
 
     /// @dev In-range position is penalised; position with activeDistance >= ACTIVE_DISTANCE_TICKS receives no penalty.
     function test_Sentinel_ActiveRangePenaltyGreaterThanInactiveRange() public {
-        address atkA = makeAddr("active"); address atkI = makeAddr("inactive");
-        _fundAndApprove(atkA, 1000e18); _fundAndApprove(atkI, 1000e18);
+        address atkA = makeAddr("active");
+        address atkI = makeAddr("inactive");
+        _fundAndApprove(atkA, 1000e18);
+        _fundAndApprove(atkI, 1000e18);
 
         // Active: surrounds tick 0 — token0 deposited
         vm.startPrank(atkA);
         uint256 bA0 = currency0.balanceOf(atkA);
-        (uint256 tidA,) = positionManager.mint(poolKey, -120, 120, 10e18, type(uint256).max, type(uint256).max, atkA, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tidA,) = positionManager.mint(
+            poolKey,
+            -120,
+            120,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            atkA,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
         uint256 depA = bA0 - currency0.balanceOf(atkA);
         uint256 bAr = currency0.balanceOf(atkA);
         positionManager.decreaseLiquidity(tidA, 10e18, 0, 0, atkA, block.timestamp + 1, Constants.ZERO_BYTES);
@@ -259,7 +326,17 @@ contract SentinelJITGuardHookTest is BaseTest {
         // Inactive: tick 0 is below tickLower=660 (distance >= ACTIVE_DISTANCE_TICKS) — only token1 deposited
         vm.startPrank(atkI);
         uint256 bI1 = currency1.balanceOf(atkI);
-        (uint256 tidI,) = positionManager.mint(poolKey, 660, 1260, 10e18, type(uint256).max, type(uint256).max, atkI, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tidI,) = positionManager.mint(
+            poolKey,
+            660,
+            1260,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            atkI,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
         uint256 depI = bI1 - currency1.balanceOf(atkI);
         uint256 bIr = currency1.balanceOf(atkI);
         positionManager.decreaseLiquidity(tidI, 10e18, 0, 0, atkI, block.timestamp + 1, Constants.ZERO_BYTES);
@@ -277,9 +354,13 @@ contract SentinelJITGuardHookTest is BaseTest {
         for (uint256 i = 0; i < 8; i++) {
             vm.roll(block.number + 1);
             swapRouter.swapExactTokensForTokens({
-                amountIn: 5e18, amountOutMin: 0, zeroForOne: i % 2 == 0,
-                poolKey: poolKey, hookData: Constants.ZERO_BYTES,
-                receiver: address(this), deadline: type(uint256).max
+                amountIn: 5e18,
+                amountOutMin: 0,
+                zeroForOne: i % 2 == 0,
+                poolKey: poolKey,
+                hookData: Constants.ZERO_BYTES,
+                receiver: address(this),
+                deadline: type(uint256).max
             });
         }
 
@@ -298,7 +379,17 @@ contract SentinelJITGuardHookTest is BaseTest {
         _fundAndApprove(lp, 1000e18);
 
         vm.startPrank(lp);
-        (uint256 tid,) = positionManager.mint(poolKey, -120, 120, 20e18, type(uint256).max, type(uint256).max, lp, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tid,) = positionManager.mint(
+            poolKey,
+            -120,
+            120,
+            20e18,
+            type(uint256).max,
+            type(uint256).max,
+            lp,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
 
         positionManager.decreaseLiquidity(tid, 10e18, 0, 0, lp, block.timestamp + 1, Constants.ZERO_BYTES);
 
@@ -321,7 +412,17 @@ contract SentinelJITGuardHookTest is BaseTest {
         _fundAndApprove(lp, 1000e18);
 
         vm.startPrank(lp);
-        (uint256 tid,) = positionManager.mint(poolKey, -120, 120, 10e18, type(uint256).max, type(uint256).max, lp, block.timestamp + 1, Constants.ZERO_BYTES);
+        (uint256 tid,) = positionManager.mint(
+            poolKey,
+            -120,
+            120,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            lp,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
+        );
 
         bytes32 pk = keccak256(abi.encodePacked(address(positionManager), int24(-120), int24(120), bytes32(tid)));
         (uint48 blockFirst,,,, uint128 liqFirst,,) = hook.positions(poolId, pk);
@@ -329,7 +430,9 @@ contract SentinelJITGuardHookTest is BaseTest {
 
         vm.roll(block.number + 5);
 
-        positionManager.increaseLiquidity(tid, 10e18, type(uint256).max, type(uint256).max, block.timestamp + 1, Constants.ZERO_BYTES);
+        positionManager.increaseLiquidity(
+            tid, 10e18, type(uint256).max, type(uint256).max, block.timestamp + 1, Constants.ZERO_BYTES
+        );
 
         (uint48 blockSecond,,,, uint128 liqSecond,,) = hook.positions(poolId, pk);
         assertEq(liqSecond, 20e18, "liquidity should accumulate");
@@ -363,13 +466,29 @@ contract SentinelJITGuardHookTest is BaseTest {
 
         vm.startPrank(lpA);
         (uint256 tidA,) = positionManager.mint(
-            poolKey, tickLower, tickUpper, 10e18, type(uint256).max, type(uint256).max, lpA, block.timestamp + 1, Constants.ZERO_BYTES
+            poolKey,
+            tickLower,
+            tickUpper,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            lpA,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
         );
         vm.stopPrank();
 
         vm.startPrank(lpB);
         (uint256 tidB,) = positionManager.mint(
-            poolKeyB, tickLower, tickUpper, 10e18, type(uint256).max, type(uint256).max, lpB, block.timestamp + 1, Constants.ZERO_BYTES
+            poolKeyB,
+            tickLower,
+            tickUpper,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            lpB,
+            block.timestamp + 1,
+            Constants.ZERO_BYTES
         );
         vm.stopPrank();
 
