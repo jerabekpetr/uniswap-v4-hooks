@@ -20,6 +20,8 @@ import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 ///      scaled by 1e18). The fee scales linearly from BASE_FEE at zero volatility to
 ///      MAX_FEE at VOL_SCALE. This contract acts as a simple comparison benchmark for
 ///      the FlowScoreHook.
+/// @dev Non-production analysis contract used only for thesis benchmarks,
+///      simulations, and tests. Not audited or hardened for production use.
 contract SimpleVolatilityFeeHook is BaseHook {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;

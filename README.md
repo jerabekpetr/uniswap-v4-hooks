@@ -8,7 +8,7 @@ Dva Uniswap v4 hooky implementované v Solidity s interaktivní frontendovou sim
 
 ### SentinelJITGuardHook
 
-Ochrana proti JIT (Just-In-Time) likviditním útokům. Hook sleduje, ve kterém bloku byla pozice otevřena, a při jejím okamžitém uzavření ve stejném bloku (typický JIT pattern) penalizuje poskytovatele likvidity — odebere část vložených tokenů i nashromážděných poplatků.
+Ochrana proti JIT (Just-In-Time) likviditním útokům. Hook sleduje, ve kterém bloku byla pozice otevřena, a při jejím předčasném uzavření (před uplynutím `GRACE_BLOCKS` bloků) aplikuje adaptivní penalizaci závislou na věku pozice, šířce tickového rozsahu, vzdálenosti od aktivního ticku a aktuální volatilitě poolu. Penalizované tokeny jsou vráceny zpět do poolu.
 
 **Soubory:** [src/SentinelJITGuardHook.sol](src/SentinelJITGuardHook.sol) · [src/SentinelSimulator.sol](src/SentinelSimulator.sol)
 
@@ -16,8 +16,10 @@ Ochrana proti JIT (Just-In-Time) likviditním útokům. Hook sleduje, ve kterém
 
 Dynamický poplatek podle toho, jak swap ovlivňuje rovnováhu poolu (50:50 token0/token1).
 
-- **Toxický swap** (pool se vzdaluje od 50:50): poplatek roste lineárně od BASE\_FEE (0,30 %) až po MAX\_FEE (1,00 %) — čím dál od rovnováhy, tím vyšší penalizace. Část příplatku jde do `feePot`.
-- **Benigní swap** (pool se přibližuje k 50:50): poplatek snížen na MIN\_FEE (0,05 %) a navíc cashback z `feePot` úměrný tomu, jak moc byl pool nevyvážený před swapem.
+- **Toxický swap** (pool se vzdaluje od 50:50): poplatek roste lineárně od BASE\_FEE (0,30 %) až po MAX\_FEE (1,00 %) — čím dál od rovnováhy, tím vyšší penalizace. Část příplatku jde do `feePot0` nebo `feePot1` podle toho, v jakém tokenu je příplatek placen.
+- **Benigní swap** (pool se přibližuje k 50:50): poplatek snížen na MIN\_FEE (0,05 %) a navíc cashback z příslušného výstupního fee potu (`feePot0` nebo `feePot1`) úměrný tomu, jak moc byl pool nevyvážený před swapem.
+
+Cashback podléhá caller/router-level throttlingu (ne per-user ochraně) — primárními kontrolami extrakce jsou per-blokový strop `MAX_BLOCK_CASHBACK_BPS_OF_POT` a minimální rezerva `MIN_FEE_POT_RESERVE`.
 
 **Soubory:** [src/FlowScoreHook.sol](src/FlowScoreHook.sol) · [src/FlowScoreSimulator.sol](src/FlowScoreSimulator.sol)
 

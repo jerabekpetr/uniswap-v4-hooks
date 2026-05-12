@@ -59,6 +59,8 @@ interface IFlowScoreHookLike {
 /// @dev Deploys a single pool with the FlowScoreHook attached, provides liquidity,
 ///      and exposes helpers to execute swaps and inspect hook state. Intended for
 ///      use in Foundry tests and deployment scripts only — not production code.
+/// @dev Non-production analysis contract used only for thesis benchmarks,
+///      simulations, and tests. Not audited or hardened for production use.
 contract FlowScoreSimulator {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;

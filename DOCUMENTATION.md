@@ -151,6 +151,7 @@ struct PoolFlowState {
 | `_afterSwap(...)` | `internal override` | Aktualizuje EMA stav, vypořádá odložené příspěvky (exactOutput), vyplácí cashback |
 | `_computeToxicity(state, params, pid)` | `internal view` | Vrátí `(toxicityRatio, isToxic)` na základě 3-složkového score |
 | `_computeCashbackBps(imbalanceBefore, imbalanceAfter, scale)` | `internal pure` | Cashback BPS úměrný snížení imbalance |
+| `_toPositiveDelta(uint256)` | `internal pure` | Převede uint256 na kladný int128 s kontrolou přetečení; všechny delta casty prochází touto funkcí |
 | `flowState(poolId)` | `public` | Vrací celý PoolFlowState |
 
 **Povolené callbacky:**
@@ -170,7 +171,9 @@ SentinelJITGuardHook tento vzor finančně trestá adaptivní penalizací slože
 #### Penalizační vzorec
 
 ```
-penaltyBps = BASE_PENALTY_BPS × ageFactor × widthFactor × activeFactor + volBoostBps
+penaltyBps = BASE_PENALTY_BPS × ageFactor × widthFactor × activeFactor
+penaltyBps = penaltyBps × (BPS + volBoostBps) / BPS   // multiplikativní volatility boost
+if (penaltyBps > MAX_PENALTY_BPS) penaltyBps = MAX_PENALTY_BPS  // tvrdý strop
 ```
 
 | Faktor | Popis |
@@ -180,7 +183,7 @@ penaltyBps = BASE_PENALTY_BPS × ageFactor × widthFactor × activeFactor + volB
 | `activeFactor` | 100 % pokud je tick v rozsahu; 0 % pokud vzdálenost ≥ `ACTIVE_DISTANCE_TICKS` |
 | `volBoostBps` | Lineárně až `MAX_VOL_BOOST_BPS` podle EMA sigma poolu |
 
-Procentní penalizace se aplikuje na hodnotu odebírané likvidity. Pokud je penalizace nenulová, nashromážděné fee jsou odebrány celé. Penalizované tokeny jsou odeslány zpět do poolu přes `poolManager.donate()`.
+Procentní penalizace se aplikuje na hodnotu odebírané likvidity. Pokud je penalizace nenulová, nashromážděné fee jsou odebrány celé. Penalizované tokeny jsou odeslány zpět do poolu přes `poolManager.donate()`. Výsledná hodnota `penaltyBps` je vždy oříznutá na `MAX_PENALTY_BPS`.
 
 #### Lifecycle callbacků
 
@@ -188,6 +191,8 @@ Procentní penalizace se aplikuje na hodnotu odebírané likvidity. Pokud je pen
 [LP add]
   └─► afterAddLiquidity
         └─► uloží PositionData (addedAtBlock, ticky, likvidita)
+            Identita pozice je určena klíčem Position.calculatePositionKey(sender, tickLower, tickUpper, salt)
+            z v4-core; hookData je pro účely účetnictví ignorováno.
             (opakované add resetuje hodiny - addedAtBlock = block.number)
 
 [Swap]
@@ -256,13 +261,13 @@ fee = MIN_FEE                                                 [benigní swap]
   └─► afterSwap
         ├─► aktualizuje emaTick, signedFlowEma, inventoryImbalance
         ├─► pokud benigní + podmínky anti-gaming splněny:
-        │    └─► _computeCashbackBps → cashback = swapSize × cashbackBps
+        │    └─► _computeCashbackBps → cashback vypočítán z reálného výstupního delta
         │         → _settleToPoolManager → vrátí cashback swapperovi
         └─► emituje CashbackPaid
 
 [Swap - exactOutput]
-  └─► beforeSwap  → uloží contribution do pendingContribution, nenastavuje BeforeSwapDelta
-  └─► afterSwap   → sbírá deferred contribution, pak jako exactInput
+  └─► beforeSwap  → uloží contribution do pendingExtraFee;
+  └─► afterSwap   → sbírá odloženou contribution z reálného vstupního delta
 ```
 
 #### Anti-gaming mechanismy cashbacku
@@ -270,7 +275,7 @@ fee = MIN_FEE                                                 [benigní swap]
 | Mechanismus | Konstanta | Popis |
 |-------------|-----------|-------|
 | Minimální velikost swapu | `MIN_CASHBACK_TRADE_SIZE = 1e16` | Mikroswappy cashback nedostanou |
-| Per-address cooldown | Mapování `lastBonusBlock` | Každá adresa dostane cashback max 1× za blok |
+| Per-caller (router) cooldown | Mapování `lastBonusBlockByCaller` | Každá adresa dostane cashback max 1× za blok |
 | Per-block cap | `MAX_BLOCK_CASHBACK_BPS_OF_POT = 20 %` | Celkový cashback v jednom bloku nepřekročí 20 % potu |
 | Minimální rezerva | `MIN_FEE_POT_RESERVE = 1e15` | Pot nesmí klesnout pod tuto hodnotu |
 | Imbalance-proportional | `_computeCashbackBps` | Cashback je vyšší, čím větší imbalanci swap vyřeší |

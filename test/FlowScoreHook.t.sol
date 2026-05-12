@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -682,6 +682,123 @@ contract FlowScoreHookTest is BaseTest {
         assertLe(paidEndSameBlock, potStart - hook.MIN_FEE_POT_RESERVE(), "reserve must cap extractable cashback");
         assertGe(potEndSameBlock, hook.MIN_FEE_POT_RESERVE(), "pot must not be drained below reserve");
         assertLe(potEndSameBlock, potStart, "split extraction attempt must not increase pot");
+    }
+
+    /// @dev Exact-output benign swap must not emit CashbackPaid and must not decrease feePot.
+    function test_FlowScore_NoCashbackForExactOutput() public {
+        _fundAndApprove(address(this), 20_000e18);
+
+        // Build feePot with a large toxic exact-input swap.
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 10e18,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+
+        (,,, uint256 fp0Before,,,,,) = hook.flowState(poolId);
+        assertGt(fp0Before, 0, "feePot must be non-zero before test");
+
+        vm.roll(block.number + 1);
+
+        // Benign exact-output swap (token1 in, token0 out — reduces token0-heavy imbalance).
+        vm.recordLogs();
+        swapRouter.swapTokensForExactTokens({
+            amountOut: 1e18,
+            amountInMax: 20_000e18,
+            zeroForOne: false,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        // CashbackPaid must not be emitted for exact-output swaps.
+        bytes32 cashbackSig = keccak256("CashbackPaid(bytes32,uint256)");
+        for (uint256 i = 0; i < logs.length; i++) {
+            assertNotEq(logs[i].topics[0], cashbackSig, "CashbackPaid must not be emitted for exact-output swap");
+        }
+
+        // feePot must not decrease — no cashback was drawn.
+        (,,, uint256 fp0After,,,,,) = hook.flowState(poolId);
+        assertGe(fp0After, fp0Before, "feePot must not decrease for exact-output benign swap");
+    }
+
+    /// @dev For an exact-output toxic swap (pay token0, receive exact token1),
+    ///      feePot0 must increase by a contribution computed from the actual token0
+    ///      input delta, not from the requested output amount.
+    function test_FlowScore_ExactOutputContributionUsesActualInputAmount() public {
+        _fundAndApprove(address(this), 20_000e18);
+
+        // Warm up imbalance so the next swap is clearly toxic with a non-trivial fee.
+        swapRouter.swapExactTokensForTokens({
+            amountIn: 10e18,
+            amountOutMin: 0,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+
+        (,,, uint256 fp0Before,,,,,) = hook.flowState(poolId);
+        uint256 bal0Before = currency0.balanceOfSelf();
+
+        uint256 amountOut = 2e18; // exact token1 requested
+
+        vm.recordLogs();
+        swapRouter.swapTokensForExactTokens({
+            amountOut: amountOut,
+            amountInMax: 20_000e18,
+            zeroForOne: true,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: address(this),
+            deadline: block.timestamp + 1
+        });
+
+        uint256 bal0After = currency0.balanceOfSelf();
+        uint256 actualInput = bal0Before - bal0After; // actual token0 spent (includes fee)
+
+        (,,, uint256 fp0After,,,,,) = hook.flowState(poolId);
+        uint256 fp0Increase = fp0After - fp0Before;
+
+        // Extract feeCharged from SwapFeeDecision event.
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 swapFeeDecisionSig = keccak256("SwapFeeDecision(bytes32,bool,uint256,uint24)");
+        uint24 feeCharged;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == swapFeeDecisionSig) {
+                (,, uint24 fee) = abi.decode(logs[i].data, (bool, uint256, uint24));
+                feeCharged = fee;
+            }
+        }
+
+        uint256 extraFee = feeCharged > hook.BASE_FEE() ? uint256(feeCharged - hook.BASE_FEE()) : 0;
+        assertGt(extraFee, 0, "swap must be toxic with non-zero extra fee");
+
+        // actual token0 input should exceed the requested token1 output (fees + price impact).
+        assertGt(actualInput, amountOut, "actual input must exceed exact output amount");
+
+        // The hook charges the swapper (poolInput + contribution), so:
+        //   actualInput = poolInput + fp0Increase
+        //   poolInput   = actualInput - fp0Increase   (the amount _inputAmount sees in the delta)
+        // The contract formula: contribution = poolInput * extraFee * FEE_POT_CONTRIBUTION_BPS
+        //                                      / (FEE_UNITS_DENOMINATOR * BPS_DENOMINATOR)
+        uint256 poolInput = actualInput - fp0Increase;
+        uint256 expectedFromPoolInput = poolInput * extraFee * hook.FEE_POT_CONTRIBUTION_BPS()
+            / (hook.FEE_UNITS_DENOMINATOR() * hook.BPS_DENOMINATOR());
+
+        assertApproxEqAbs(fp0Increase, expectedFromPoolInput, 1, "feePot0 must grow by actual-pool-input-based contribution");
+
+        // The old (wrong) formula was based on the requested output amount — verify we beat it.
+        uint256 expectedFromOutput = amountOut * extraFee * hook.FEE_POT_CONTRIBUTION_BPS()
+            / (hook.FEE_UNITS_DENOMINATOR() * hook.BPS_DENOMINATOR());
+        assertGt(fp0Increase, expectedFromOutput, "contribution must exceed output-based calculation");
     }
 
     // ─────────────────────────────────────────────

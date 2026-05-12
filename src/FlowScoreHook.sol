@@ -124,11 +124,20 @@ contract FlowScoreHook is BaseHook {
     /// @notice Pending toxic contribution deferred from beforeSwap to afterSwap (exactOutput path).
     mapping(PoolId poolId => uint256 amount) public pendingContribution;
 
+    /// @notice Extra fee rate (fee − BASE_FEE) stored in beforeSwap for exactOutput toxic swaps;
+    ///         cleared in afterSwap after the actual-input contribution is computed.
+    mapping(PoolId poolId => uint24 extraFee) public pendingExtraFee;
+
     /// @notice True when a toxic exactInput swap is in flight for the given pool.
     mapping(PoolId poolId => bool inFlight) public toxicSwapInProgress;
 
-    /// @notice Tracks the last block in which each address received cashback from a given pool.
-    mapping(PoolId poolId => mapping(address sender => uint48)) public lastBonusBlock;
+    /// @notice Tracks the last block in which each caller (router) received cashback from a given pool.
+    /// @dev This is a caller-level throttle, not per-user Sybil resistance. In Uniswap v4, `sender`
+    ///      passed to hooks is the immediate PoolManager caller — typically a shared router contract —
+    ///      not the end trader's EOA. The primary enforceable extraction controls are
+    ///      `MAX_BLOCK_CASHBACK_BPS_OF_POT` (per-block pot drain limit) and `MIN_FEE_POT_RESERVE`
+    ///      (minimum pot balance that cannot be distributed).
+    mapping(PoolId poolId => mapping(address sender => uint48)) public lastBonusBlockByCaller;
 
     /// @notice Address that may call owner-restricted admin functions.
     address public owner;
@@ -227,7 +236,10 @@ contract FlowScoreHook is BaseHook {
     /// @dev Toxic swaps (those that worsen pool imbalance) pay up to MAX_FEE.
     ///      Benign swaps pay MIN_FEE and are eligible for cashback in afterSwap.
     ///      For exactInput toxic swaps the surcharge contribution is collected immediately
-    ///      via a BeforeSwapDelta; for exactOutput it is deferred to afterSwap.
+    ///      from the known input amount via a BeforeSwapDelta.
+    ///      For exactOutput toxic swaps, only the extra fee rate (fee − BASE_FEE) is stored
+    ///      in `pendingExtraFee`; the contribution amount is computed in afterSwap using the
+    ///      actual input delta once it is known.
     /// @param key The pool in which the swap occurs.
     /// @param params Swap direction and amount.
     /// @return selector The beforeSwap selector.
@@ -268,13 +280,14 @@ contract FlowScoreHook is BaseHook {
 
                 return (
                     BaseHook.beforeSwap.selector,
-                    toBeforeSwapDelta(int128(uint128(contribution)), 0),
+                    toBeforeSwapDelta(_toPositiveDelta(contribution), 0),
                     fee | LPFeeLibrary.OVERRIDE_FEE_FLAG
                 );
             }
 
-            // exactOutput: defer collection to afterSwap.
-            pendingContribution[pid] = contribution;
+            // exactOutput: defer to afterSwap where actual input delta is known.
+            pendingExtraFee[pid] = uint24(fee - BASE_FEE);
+            pendingContribution[pid] = 0;
         } else {
             pendingContribution[pid] = 0;
             toxicSwapInProgress[pid] = false;
@@ -284,11 +297,18 @@ contract FlowScoreHook is BaseHook {
     }
 
     /// @notice Updates flow state, settles deferred toxic contributions, and pays cashback.
-    /// @dev For exactOutput toxic swaps the deferred contribution is collected here.
-    ///      For benign swaps, cashback is paid from the output-token fee pot subject to
-    ///      several anti-gaming guards (minimum trade size, per-address cooldown, block cap,
-    ///      and a minimum pot reserve).
-    /// @param sender The address that initiated the swap (used for per-address cashback cooldown).
+    /// @dev For exactOutput toxic swaps the deferred contribution is computed here from the
+    ///      actual input delta using the fee rate stored in `pendingExtraFee`, then taken
+    ///      from the pool manager. Exact-output swaps never receive cashback regardless of
+    ///      flow direction — the output-amount semantics make cashback calculations unreliable.
+    ///      For exactInput benign swaps, cashback is paid from the output-token fee pot subject
+    ///      to several anti-gaming guards (minimum trade size, per-caller cooldown, block cap,
+    ///      and a minimum pot reserve). Cashback is computed from the actual output delta.
+    ///      Note: `sender` is the immediate PoolManager caller (typically a shared router), not
+    ///      the end trader's EOA — so the per-caller cooldown is router-level, not user-level.
+    ///      The primary enforceable extraction controls are `MAX_BLOCK_CASHBACK_BPS_OF_POT` and
+    ///      `MIN_FEE_POT_RESERVE`.
+    /// @param sender The router (PoolManager immediate caller) that initiated the swap.
     /// @param key The pool in which the swap occurred.
     /// @param params Swap direction and amount.
     /// @param delta Actual token deltas resulting from the swap.
@@ -331,22 +351,48 @@ contract FlowScoreHook is BaseHook {
 
         state.lastUpdated = block.timestamp;
 
-        // Toxic swap – exactOutput deferred contribution.
-        uint256 contribution = pendingContribution[pid];
-        if (contribution > 0) {
+        // Toxic swap – exactOutput deferred contribution using actual input amount.
+        if (pendingExtraFee[pid] > 0) {
+            uint256 inputAmount = _inputAmount(params, delta);
+            uint256 contribution = inputAmount * pendingExtraFee[pid] * FEE_POT_CONTRIBUTION_BPS
+                / (FEE_UNITS_DENOMINATOR * BPS_DENOMINATOR);
+            pendingExtraFee[pid] = 0;
+            toxicSwapInProgress[pid] = false;
+
+            if (contribution > 0) {
+                bool inputIsToken0 = params.zeroForOne;
+                _increaseFeePot(state, inputIsToken0, contribution);
+
+                Currency inputCurrency = params.zeroForOne ? key.currency0 : key.currency1;
+                poolManager.take(inputCurrency, address(this), contribution);
+
+                return (BaseHook.afterSwap.selector, _toPositiveDelta(contribution));
+            }
+            return (BaseHook.afterSwap.selector, 0);
+        }
+
+        // Legacy exactOutput deferred path (pendingContribution always 0 with new flow).
+        uint256 legacyContrib = pendingContribution[pid];
+        if (legacyContrib > 0) {
             bool inputIsToken0 = params.zeroForOne;
-            _increaseFeePot(state, inputIsToken0, contribution);
+            _increaseFeePot(state, inputIsToken0, legacyContrib);
             pendingContribution[pid] = 0;
             toxicSwapInProgress[pid] = false;
 
             Currency inputCurrency = params.zeroForOne ? key.currency0 : key.currency1;
-            poolManager.take(inputCurrency, address(this), contribution);
+            poolManager.take(inputCurrency, address(this), legacyContrib);
 
-            return (BaseHook.afterSwap.selector, int128(uint128(contribution)));
+            return (BaseHook.afterSwap.selector, _toPositiveDelta(legacyContrib));
         }
 
         if (toxicSwapInProgress[pid]) {
             toxicSwapInProgress[pid] = false;
+            return (BaseHook.afterSwap.selector, 0);
+        }
+
+        // Exact-output swaps never receive cashback: output-amount semantics make the
+        // cashback calculation unreliable, so we disable it entirely for this path.
+        if (params.amountSpecified > 0) {
             return (BaseHook.afterSwap.selector, 0);
         }
 
@@ -358,7 +404,7 @@ contract FlowScoreHook is BaseHook {
 
         // anti-gaming guards.
         if (swapSizeAbs < MIN_CASHBACK_TRADE_SIZE) return (BaseHook.afterSwap.selector, 0);
-        if (lastBonusBlock[pid][sender] >= uint48(block.number)) return (BaseHook.afterSwap.selector, 0);
+        if (lastBonusBlockByCaller[pid][sender] >= uint48(block.number)) return (BaseHook.afterSwap.selector, 0);
 
         // Per-block cap: reset counter on a new block.
         if (state.bonusBlock != uint48(block.number)) {
@@ -368,9 +414,10 @@ contract FlowScoreHook is BaseHook {
         uint256 blockCap = availablePot * MAX_BLOCK_CASHBACK_BPS_OF_POT / BPS_DENOMINATOR;
         if (state.blockBonusPaid >= blockCap) return (BaseHook.afterSwap.selector, 0);
 
-        // Compute cashback.
+        // Compute cashback from actual output delta (not amountSpecified).
         uint256 cashbackBps = _computeCashbackBps(imbalanceBefore, imbalanceAfter, state.imbalanceScale);
-        uint256 cashback = (swapSizeAbs * cashbackBps) / BPS_DENOMINATOR;
+        uint256 outputAmount = _outputAmount(params, delta);
+        uint256 cashback = outputAmount * cashbackBps / BPS_DENOMINATOR;
         if (cashback == 0) return (BaseHook.afterSwap.selector, 0);
 
         // Reserve guard: keep MIN_FEE_POT_RESERVE in the pot.
@@ -387,13 +434,13 @@ contract FlowScoreHook is BaseHook {
 
         _decreaseFeePot(state, outputIsToken0, cashback);
         state.blockBonusPaid += cashback;
-        lastBonusBlock[pid][sender] = uint48(block.number);
+        lastBonusBlockByCaller[pid][sender] = uint48(block.number);
 
         Currency outputCurrency = params.zeroForOne ? key.currency1 : key.currency0;
         _settleToPoolManager(outputCurrency, cashback);
 
         emit CashbackPaid(pid, cashback);
-        return (BaseHook.afterSwap.selector, -int128(uint128(cashback)));
+        return (BaseHook.afterSwap.selector, -_toPositiveDelta(cashback));
     }
 
     // ─────────────────────────────────────────────
@@ -499,6 +546,31 @@ contract FlowScoreHook is BaseHook {
             (sizeScoreBps * WEIGHT_SIZE_BPS + flowScoreBps * WEIGHT_FLOW_BPS + deviationScoreBps * WEIGHT_DEVIATION_BPS)
                 / BPS_DENOMINATOR;
         toxicityRatio = compositeBps / 100;
+    }
+
+    /// @notice Returns the absolute input amount from a swap delta in input-token units.
+    function _inputAmount(SwapParams calldata params, BalanceDelta delta) internal pure returns (uint256) {
+        int128 rawInput = params.zeroForOne ? delta.amount0() : delta.amount1();
+        return _absDelta(rawInput);
+    }
+
+    /// @notice Returns the absolute output amount from a swap delta in output-token units.
+    function _outputAmount(SwapParams calldata params, BalanceDelta delta) internal pure returns (uint256) {
+        int128 rawOutput = params.zeroForOne ? delta.amount1() : delta.amount0();
+        return _absDelta(rawOutput);
+    }
+
+    /// @notice Safely casts a uint256 amount to a positive int128 hook delta.
+    /// @dev Reverts if amount exceeds type(int128).max to prevent silent overflow.
+    function _toPositiveDelta(uint256 amount) internal pure returns (int128) {
+        require(amount <= uint256(uint128(type(int128).max)), "delta overflow");
+        return int128(uint128(amount));
+    }
+
+    /// @notice Safe absolute value for int128 swap deltas.
+    function _absDelta(int128 amount) internal pure returns (uint256) {
+        require(amount != type(int128).min, "delta min");
+        return amount < 0 ? uint256(uint128(-amount)) : uint256(uint128(amount));
     }
 
     /// @notice Returns the absolute value of a signed integer.

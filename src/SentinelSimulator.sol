@@ -24,6 +24,8 @@ import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 /// @dev Maintains two identical pools — one with the hook attached and one without —
 ///      so that JIT attack scenarios can be compared side-by-side. Intended for use
 ///      in Foundry tests and deployment scripts only — not production code.
+/// @dev Non-production analysis contract used only for thesis benchmarks,
+///      simulations, and tests. Not audited or hardened for production use.
 contract SentinelSimulator {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;

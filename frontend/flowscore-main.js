@@ -104,7 +104,7 @@ async function refreshSnapshot() {
         return;
     }
 
-    lastDirectionEl.textContent = `Směr: ${info.zeroForOne ? 'token0 -> token1' : 'token1 -> token0'}`;
+    lastDirectionEl.textContent = `Směr: ${info.zeroForOne ? 'token1 → token0' : 'token0 → token1'}`;
     lastFeeEl.textContent = `Fee zaplaceno: ${fmtT(fmtU(info.feePaid))}`;
     lastOutEl.textContent = `Obdržel ze swapu: ${fmtT(fmtU(info.amountOut))}`;
     lastPotInEl.textContent = `Do feePotu přibylo: ${fmtT(fmtU(info.feePotAdded))}`;

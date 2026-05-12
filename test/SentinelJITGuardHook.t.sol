@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -14,6 +14,7 @@ import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
+import {Position} from "@uniswap/v4-core/src/libraries/Position.sol";
 
 import {EasyPosm} from "./utils/libraries/EasyPosm.sol";
 import {BaseTest} from "./utils/BaseTest.sol";
@@ -81,9 +82,11 @@ contract SentinelJITGuardHookTest is BaseTest {
     // ─────────────────────────────────────────────
 
     /// @dev Hook stores addedAtBlock and liquidity after afterAddLiquidity callback.
+    ///      Position key is the v4-canonical key: (sender=positionManager, tickLower, tickUpper, salt=tokenId).
     function test_PositionTrackedOnAdd() public view {
-        bytes32 pk =
-            keccak256(abi.encodePacked(address(positionManager), tickLower, tickUpper, bytes32(passiveLPTokenId)));
+        bytes32 pk = Position.calculatePositionKey(
+            address(positionManager), tickLower, tickUpper, bytes32(passiveLPTokenId)
+        );
 
         (uint48 addedAtBlock,,,,,,) = hook.positions(poolId, pk);
         assertEq(addedAtBlock, uint48(block.number));
@@ -373,6 +376,54 @@ contract SentinelJITGuardHookTest is BaseTest {
         assertGt(volBoostBps, 0, "volatility boost must be non-zero");
     }
 
+    /// @dev Even when volatility is maximally elevated, the emitted penaltyBps is capped at MAX_PENALTY_BPS.
+    function test_Sentinel_PenaltyBps_CappedAfterVolatilityBoost() public {
+        // Drive sigmaX18 to at least VOL_SCALE * 1e18 (= 100 ticks EMA) so the vol boost is saturated.
+        _fundAndApproveSwap(address(this), 10_000e18);
+        for (uint256 i = 0; i < 10; i++) {
+            vm.roll(block.number + 1);
+            swapRouter.swapExactTokensForTokens({
+                amountIn: 5e18,
+                amountOutMin: 0,
+                zeroForOne: i % 2 == 0,
+                poolKey: poolKey,
+                hookData: Constants.ZERO_BYTES,
+                receiver: address(this),
+                deadline: type(uint256).max
+            });
+        }
+
+        (,, uint256 sigmaX18,) = hook.volatility(poolId);
+        assertGe(sigmaX18, hook.VOL_SCALE() * 1e18, "sigma must reach VOL_SCALE for max boost");
+
+        // Narrow in-range, same-block JIT — without the cap, penaltyBps would be
+        // BASE_PENALTY_BPS * (BPS + MAX_VOL_BOOST_BPS) / BPS = 3000 * 1.5 = 4500 > MAX_PENALTY_BPS.
+        address attacker = makeAddr("capAttacker");
+        _fundAndApprove(attacker, 1000e18);
+
+        vm.startPrank(attacker);
+        (uint256 tid,) = positionManager.mint(
+            poolKey, -120, 120, 10e18, type(uint256).max, type(uint256).max, attacker, block.timestamp + 1, Constants.ZERO_BYTES
+        );
+
+        vm.recordLogs();
+        positionManager.decreaseLiquidity(tid, 10e18, 0, 0, attacker, block.timestamp + 1, Constants.ZERO_BYTES);
+        vm.stopPrank();
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 penaltyDecisionSig = keccak256("PenaltyDecision(bytes32,bytes32,uint256,uint256,int24,int24)");
+
+        bool found = false;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == penaltyDecisionSig) {
+                (uint256 penaltyBps,,,) = abi.decode(logs[i].data, (uint256, uint256, int24, int24));
+                assertLe(penaltyBps, hook.MAX_PENALTY_BPS(), "penaltyBps must be capped at MAX_PENALTY_BPS");
+                found = true;
+            }
+        }
+        assertTrue(found, "PenaltyDecision event must be emitted");
+    }
+
     /// @dev Partial removal preserves position metadata; full removal deletes it.
     function test_Sentinel_PartialRemoval_PreservesRemainingPosition() public {
         address lp = makeAddr("partialLP");
@@ -537,6 +588,78 @@ contract SentinelJITGuardHookTest is BaseTest {
         assertGt(bInB, 0, "pool B position must remain intact");
         assertEq(liqBInB, 10e18, "pool B liquidity must be unchanged");
         assertEq(bInA, 0, "pool B position key must not appear in pool A");
+    }
+
+    /// @dev Forged hookData from an unrelated caller cannot overwrite a victim's position metadata.
+    ///      Both callers go through positionManager so their canonical keys differ by salt (tokenId).
+    function test_Sentinel_CanonicalPositionKeyIgnoresForgedHookData() public {
+        address victim = makeAddr("victim");
+        address attacker = makeAddr("attacker");
+        _fundAndApprove(victim, 1000e18);
+        _fundAndApprove(attacker, 1000e18);
+
+        // Victim opens a position.
+        vm.prank(victim);
+        (uint256 victimTid,) = positionManager.mint(
+            poolKey, -120, 120, 10e18, type(uint256).max, type(uint256).max, victim, block.timestamp + 1, Constants.ZERO_BYTES
+        );
+
+        bytes32 victimKey = Position.calculatePositionKey(address(positionManager), -120, 120, bytes32(victimTid));
+        (uint48 victimBlock,,,, uint128 victimLiq,,) = hook.positions(poolId, victimKey);
+        assertGt(victimBlock, 0);
+        assertEq(victimLiq, 10e18);
+
+        // Attacker adds dust with hookData forged to encode the victim's address.
+        vm.prank(attacker);
+        positionManager.mint(
+            poolKey,
+            -120,
+            120,
+            1e15,
+            type(uint256).max,
+            type(uint256).max,
+            attacker,
+            block.timestamp + 1,
+            abi.encode(victim) // forged hookData — ignored by the hook
+        );
+
+        // Victim's metadata is unchanged because the hook uses the canonical key (different salt).
+        (uint48 victimBlockAfter,,,, uint128 victimLiqAfter,,) = hook.positions(poolId, victimKey);
+        assertEq(victimBlockAfter, victimBlock, "victim addedAtBlock must be unchanged");
+        assertEq(victimLiqAfter, victimLiq, "victim liquidity must be unchanged");
+    }
+
+    /// @dev Remove succeeds even when hookData differs between add and remove calls,
+    ///      because the hook derives the position key solely from the canonical (sender, ticks, salt).
+    function test_Sentinel_RemoveUsesCanonicalKey_IgnoresHookData() public {
+        address lp = makeAddr("hookDataLP");
+        _fundAndApprove(lp, 1000e18);
+
+        address someAddress = makeAddr("someAddress");
+
+        vm.startPrank(lp);
+        // Add with non-empty hookData.
+        (uint256 tid,) = positionManager.mint(
+            poolKey,
+            -120,
+            120,
+            10e18,
+            type(uint256).max,
+            type(uint256).max,
+            lp,
+            block.timestamp + 1,
+            abi.encode(someAddress)
+        );
+
+        // Remove with empty hookData — must resolve the same canonical key and not revert.
+        vm.roll(block.number + hook.GRACE_BLOCKS());
+        positionManager.decreaseLiquidity(tid, 10e18, 0, 0, lp, block.timestamp + 1, Constants.ZERO_BYTES);
+        vm.stopPrank();
+
+        // Position fully removed → metadata deleted.
+        bytes32 pk = Position.calculatePositionKey(address(positionManager), -120, 120, bytes32(tid));
+        (uint48 addedAfter,,,,,,) = hook.positions(poolId, pk);
+        assertEq(addedAfter, 0, "position metadata must be deleted after full removal");
     }
 
     // ─────────────────────────────────────────────

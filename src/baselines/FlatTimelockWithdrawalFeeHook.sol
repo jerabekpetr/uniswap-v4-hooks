@@ -15,6 +15,8 @@ import {ModifyLiquidityParams} from "v4-core/src/types/PoolOperation.sol";
 ///         before a fixed block timelock has elapsed.
 /// @dev This hook serves as a simple comparison benchmark for the SentinelJITGuardHook.
 ///      Penalised tokens (principal fraction + all accrued fees) are donated back to the pool.
+/// @dev Non-production analysis contract used only for thesis benchmarks,
+///      simulations, and tests. Not audited or hardened for production use.
 contract FlatTimelockWithdrawalFeeHook is BaseHook {
     using PoolIdLibrary for PoolKey;
 

@@ -9,6 +9,7 @@ import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {BalanceDelta, BalanceDeltaLibrary, toBalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "v4-core/src/types/PoolOperation.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
+import {Position} from "v4-core/src/libraries/Position.sol";
 
 /// @title SentinelJITGuardHook
 /// @author Petr Jeřábek
@@ -65,7 +66,8 @@ contract SentinelJITGuardHook is BaseHook {
     /// @notice Base penalty applied to principal at block 0 before other factors (30%).
     uint256 public constant BASE_PENALTY_BPS = 3_000;
 
-    /// @notice Maximum combined contribution of age, width, and distance factors (30%).
+    /// @notice Hard global cap on the total penalty, including the volatility boost (30%).
+    ///         No removal can be penalised beyond this fraction of principal, regardless of market conditions.
     uint256 public constant MAX_PENALTY_BPS = 3_000;
 
     /// @notice Number of blocks after which no penalty is applied.
@@ -181,11 +183,11 @@ contract SentinelJITGuardHook is BaseHook {
 
     /// @notice Records the deposit block, tick range, and liquidity for a position.
     /// @dev Refreshes addedAtBlock and entryTick on subsequent adds to the same slot,
-    ///      effectively resetting the JIT clock.
+    ///      effectively resetting the JIT clock. Position identity uses the v4-canonical key
+    ///      derived from (sender, tickLower, tickUpper, salt); hookData is ignored for accounting.
     /// @param sender The address that called the position manager.
     /// @param key The pool key.
     /// @param params Liquidity modification parameters (ticks, delta, salt).
-    /// @param hookData Optional bytes encoding the effective owner address.
     /// @return selector The afterAddLiquidity selector.
     /// @return hookDelta Zero delta (this hook does not redirect tokens on add).
     function _afterAddLiquidity(
@@ -194,10 +196,9 @@ contract SentinelJITGuardHook is BaseHook {
         ModifyLiquidityParams calldata params,
         BalanceDelta,
         BalanceDelta,
-        bytes calldata hookData
+        bytes calldata
     ) internal override returns (bytes4, BalanceDelta) {
-        address owner = _effectiveOwner(sender, hookData);
-        bytes32 posKey = _positionKey(owner, params.tickLower, params.tickUpper, params.salt);
+        bytes32 posKey = Position.calculatePositionKey(sender, params.tickLower, params.tickUpper, params.salt);
 
         PoolId pid = key.toId();
         PositionData storage p = positions[pid][posKey];
@@ -222,21 +223,26 @@ contract SentinelJITGuardHook is BaseHook {
             p.cumulativeRemoved = 0;
         }
 
-        emit LiquidityTracked(pid, posKey, owner, p.addedAtBlock, p.liquidity);
+        emit LiquidityTracked(pid, posKey, sender, p.addedAtBlock, p.liquidity);
         return (BaseHook.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
     /// @notice Applies an adaptive penalty when liquidity is removed within the grace period.
     /// @dev Penalty factors: age (linear decay over GRACE_BLOCKS), width (narrow = higher penalty),
-    ///      active-distance (in-range = higher penalty), and volatility boost.
+    ///      active-distance (in-range = higher penalty), and a volatility multiplier.
+    ///      The three base factors are combined first, then scaled up by the volatility boost
+    ///      (implemented as a multiplicative factor rather than an additive term), and finally
+    ///      hard-capped at MAX_PENALTY_BPS. MAX_PENALTY_BPS is a global ceiling that includes
+    ///      the volatility contribution — no single removal can exceed this fraction of principal.
     ///      The penalty is applied to the principal only; accrued fees are also fully penalised
     ///      when a penalty is active. All penalised tokens are donated back to the pool.
+    ///      Position identity uses the v4-canonical key derived from (sender, tickLower, tickUpper, salt);
+    ///      hookData is ignored for accounting, preventing forged-owner attacks.
     /// @param sender The address that triggered the removal.
     /// @param key The pool key.
     /// @param params Liquidity modification parameters.
     /// @param delta Actual token deltas from the core removal (principal + fees).
     /// @param feesAccrued The fees component of delta.
-    /// @param hookData Optional bytes encoding the effective owner address.
     /// @return selector The afterRemoveLiquidity selector.
     /// @return hookDelta Positive amounts represent tokens redirected away from the LP (penalty).
     function _afterRemoveLiquidity(
@@ -245,10 +251,9 @@ contract SentinelJITGuardHook is BaseHook {
         ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         BalanceDelta feesAccrued,
-        bytes calldata hookData
+        bytes calldata
     ) internal override returns (bytes4, BalanceDelta) {
-        address owner = _effectiveOwner(sender, hookData);
-        bytes32 posKey = _positionKey(owner, params.tickLower, params.tickUpper, params.salt);
+        bytes32 posKey = Position.calculatePositionKey(sender, params.tickLower, params.tickUpper, params.salt);
 
         PoolId pid = key.toId();
         PositionData storage p = positions[pid][posKey];
@@ -296,11 +301,13 @@ contract SentinelJITGuardHook is BaseHook {
                 ? MAX_VOL_BOOST_BPS
                 : (vol.sigmaX18 * MAX_VOL_BOOST_BPS / (VOL_SCALE * 1e18));
 
-            // Combine: base penalty modulated by all three factors, plus uncapped volatility boost.
+            // Combine: base penalty modulated by all three factors, then scaled up by the volatility
+            // boost (multiplicative), and capped at MAX_PENALTY_BPS.
             penaltyBps = BASE_PENALTY_BPS * ageFactorBps / BPS;
             penaltyBps = penaltyBps * widthFactorBps / BPS;
             penaltyBps = penaltyBps * activeFactorBps / BPS;
-            penaltyBps += volBoostBps;
+            penaltyBps = penaltyBps * (BPS + volBoostBps) / BPS;
+            if (penaltyBps > MAX_PENALTY_BPS) penaltyBps = MAX_PENALTY_BPS;
         }
 
         emit PenaltyDecision(pid, posKey, penaltyBps, ageBlocks, rangeWidth, activeTickDistance);
@@ -331,7 +338,7 @@ contract SentinelJITGuardHook is BaseHook {
             poolManager.donate(key, uint256(uint128(penalty0)), uint256(uint128(penalty1)), "");
         }
 
-        emit JITPenaltyApplied(pid, posKey, owner, penalty0, penalty1);
+        emit JITPenaltyApplied(pid, posKey, sender, penalty0, penalty1);
 
         return (BaseHook.afterRemoveLiquidity.selector, toBalanceDelta(penalty0, penalty1));
     }
@@ -368,38 +375,4 @@ contract SentinelJITGuardHook is BaseHook {
         return (BaseHook.afterSwap.selector, 0);
     }
 
-    // ─────────────────────────────────────────────
-    // Helpers
-    // ─────────────────────────────────────────────
-
-    /// @notice Derives a unique position key from owner, tick range, and salt.
-    /// @param owner The effective owner address of the position.
-    /// @param tickLower The lower tick of the position range.
-    /// @param tickUpper The upper tick of the position range.
-    /// @param salt Arbitrary salt encoded in the position NFT (token ID as bytes32).
-    /// @return A keccak256 hash uniquely identifying the position slot.
-    function _positionKey(address owner, int24 tickLower, int24 tickUpper, bytes32 salt)
-        internal
-        pure
-        returns (bytes32)
-    {
-        return keccak256(abi.encodePacked(owner, tickLower, tickUpper, salt));
-    }
-
-    /// @notice Resolves the effective position owner from optional hookData.
-    /// @dev Decodes a 32-byte ABI-encoded address or a raw 20-byte address; falls back to sender.
-    /// @param sender The msg.sender forwarded by the pool manager.
-    /// @param hookData Optional bytes that may encode the real owner address.
-    /// @return The effective owner address.
-    function _effectiveOwner(address sender, bytes calldata hookData) internal pure returns (address) {
-        if (hookData.length >= 32) return abi.decode(hookData, (address));
-        if (hookData.length >= 20) {
-            address a;
-            assembly {
-                a := shr(96, calldataload(hookData.offset))
-            }
-            return a;
-        }
-        return sender;
-    }
 }
