@@ -10,7 +10,7 @@ Dva Uniswap v4 hooky implementované v Solidity s interaktivní frontendovou sim
 
 Ochrana proti JIT (Just-In-Time) likviditním útokům. Hook sleduje, ve kterém bloku byla pozice otevřena, a při jejím předčasném uzavření (před uplynutím `GRACE_BLOCKS` bloků) aplikuje adaptivní penalizaci závislou na věku pozice, šířce tickového rozsahu, vzdálenosti od aktivního ticku a aktuální volatilitě poolu. Penalizované tokeny jsou vráceny zpět do poolu.
 
-**Soubory:** [src/SentinelJITGuardHook.sol](src/SentinelJITGuardHook.sol) · [src/SentinelSimulator.sol](src/SentinelSimulator.sol)
+**Soubory:** [src/SentinelJITGuardHook.sol](src/SentinelJITGuardHook.sol), [src/SentinelSimulator.sol](src/SentinelSimulator.sol)
 
 ### FlowScoreHook
 
@@ -21,7 +21,7 @@ Dynamický poplatek podle toho, jak swap ovlivňuje rovnováhu poolu (50:50 toke
 
 Cashback podléhá caller/router-level throttlingu (ne per-user ochraně) — primárními kontrolami extrakce jsou per-blokový strop `MAX_BLOCK_CASHBACK_BPS_OF_POT` a minimální rezerva `MIN_FEE_POT_RESERVE`.
 
-**Soubory:** [src/FlowScoreHook.sol](src/FlowScoreHook.sol) · [src/FlowScoreSimulator.sol](src/FlowScoreSimulator.sol)
+**Soubory:** [src/FlowScoreHook.sol](src/FlowScoreHook.sol), [src/FlowScoreSimulator.sol](src/FlowScoreSimulator.sol)
 
 ---
 
@@ -86,3 +86,7 @@ script/       – deploy skripty (Foundry)
 scripts/      – shell skripty pro lokální spuštění
 frontend/     – HTML/JS simulace
 ```
+
+## Dokumentace
+
+Úplná technická dokumentace projektu je dostupná v [DOCUMENTATION.md](DOCUMENTATION.md).
