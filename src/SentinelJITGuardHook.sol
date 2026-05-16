@@ -66,9 +66,9 @@ contract SentinelJITGuardHook is BaseHook {
     /// @notice Base penalty applied to principal at block 0 before other factors (30%).
     uint256 public constant BASE_PENALTY_BPS = 3_000;
 
-    /// @notice Hard global cap on the total penalty, including the volatility boost (30%).
+    /// @notice Hard global cap on the total penalty, including the volatility boost (45%).
     ///         No removal can be penalised beyond this fraction of principal, regardless of market conditions.
-    uint256 public constant MAX_PENALTY_BPS = 3_000;
+    uint256 public constant MAX_PENALTY_BPS = 4_500;
 
     /// @notice Number of blocks after which no penalty is applied.
     uint256 public constant GRACE_BLOCKS = 20;

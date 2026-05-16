@@ -284,7 +284,7 @@ contract SentinelJITGuardHookInvariantTest is StdInvariant, BaseTest {
     }
 
     function invariant_Sentinel_MaxPenaltyBound() public view {
-        assertEq(hook.MAX_PENALTY_BPS(), 3000);
+        assertEq(hook.MAX_PENALTY_BPS(), 4500);
         assertLe(hook.BASE_PENALTY_BPS(), hook.MAX_PENALTY_BPS());
     }
 }

@@ -396,8 +396,8 @@ contract SentinelJITGuardHookTest is BaseTest {
         (,, uint256 sigmaX18,) = hook.volatility(poolId);
         assertGe(sigmaX18, hook.VOL_SCALE() * 1e18, "sigma must reach VOL_SCALE for max boost");
 
-        // Narrow in-range, same-block JIT — without the cap, penaltyBps would be
-        // BASE_PENALTY_BPS * (BPS + MAX_VOL_BOOST_BPS) / BPS = 3000 * 1.5 = 4500 > MAX_PENALTY_BPS.
+        // Narrow in-range, same-block JIT — penaltyBps reaches exactly the cap:
+        // BASE_PENALTY_BPS * (BPS + MAX_VOL_BOOST_BPS) / BPS = 3000 * 1.5 = 4500 == MAX_PENALTY_BPS.
         address attacker = makeAddr("capAttacker");
         _fundAndApprove(attacker, 1000e18);
 
